@@ -1,4 +1,4 @@
-# 🍺 Homebrew Proxy Tap | 精选 macOS 代理工具全家桶 
+# 🍺 Homebrew Proxy Tap | 精选 macOS 代理工具全家桶
 
 [![Update Casks](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml) [![Create Release](https://github.com/gandli/homebrew-proxy/actions/workflows/create-release.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/create-release.yml) [![Latest Release](https://img.shields.io/github/v/release/gandli/homebrew-proxy?label=最新版本&color=blue)](https://github.com/gandli/homebrew-proxy/releases/latest)
 
@@ -66,45 +66,13 @@ brew bundle
 ./create-release.sh
 ```
 
-### 📋 详细指南
-
-查看 [Release 创建指南](RELEASE_GUIDE.md) 了解完整的创建流程和故障排除。
-
 ## 📚 文档
 
 - `brew help` - 查看 Homebrew 帮助
 - `man brew` - 查看 Homebrew 手册
 - [Homebrew 官方文档](https://docs.brew.sh) - 完整的 Homebrew 文档
-- [Release 创建指南](RELEASE_GUIDE.md) - Release 创建和管理指南
+- [Cask Tap 创建指南](https://docs.brew.sh/Cask-Cookbook) - Cask Tap 创建和管理指南
 
 ## 🤝 贡献
 
 欢迎提交 Pull Request 来添加新的应用程序或改进现有的 Cask 文件！
-
-## 📄 许可证
-
-本项目采用 [MIT 许可证](LICENSE) 开源。
-
-```text
-MIT License
-
-Copyright (c) 2024 homebrew-proxy
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
