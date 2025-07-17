@@ -1,0 +1,22 @@
+# RuboCop TODO 文件
+# 此文件包含当前代码库中需要修复但暂时禁用的规则
+# 应该定期审查并逐步修复这些问题
+
+# 生成日期: 自动生成
+# 使用命令: rubocop --auto-gen-config
+
+# 此文件由 RuboCop 自动生成
+# 包含当前代码库中违反规则的统计信息
+
+# 注意: 这个文件应该定期更新
+# 当修复了某些违规后，应该重新生成此文件
+
+# 暂时禁用的规则将在这里列出
+# 例如:
+# Style/StringLiterals:
+#   Exclude:
+#     - 'Casks/specific-cask.rb'
+
+# 当前没有需要暂时禁用的规则
+# 如果运行 rubocop --auto-gen-config 后有违规，
+# 相关规则会自动添加到这里

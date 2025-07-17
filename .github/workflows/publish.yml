@@ -1,42 +1,162 @@
-name: brew pr-pull
+---
+name: Brew PR Pull
 
-on:
+'on':
   pull_request_target:
     types:
       - labeled
+
+# 防止并发执行，避免冲突
+concurrency:
+  group: pr-pull-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
   pr-pull:
     if: contains(github.event.pull_request.labels.*.name, 'pr-pull')
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     permissions:
       actions: read
       checks: read
       contents: write
       issues: read
       pull-requests: write
+      # 最小权限原则 - 只授予必要的权限
     steps:
-      - name: Set up Homebrew
+      - name: 检出代码仓库
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+          fetch-depth: 0
+
+      - name: 验证 PR 安全性
+        run: |
+          echo "🔍 正在验证 PR 安全性..."
+
+          # 检查 PR 是否只修改了 Casks 目录
+          changed_files=$(git diff --name-only origin/main...HEAD)
+          echo "📝 修改的文件:"
+          echo "$changed_files"
+
+          # 验证只修改了允许的文件类型
+          if echo "$changed_files" | grep -v -E '^(Casks/.*\.rb|README\.md)$' | grep -q .; then
+            echo "❌ 检测到不允许的文件修改，仅允许修改 Casks/*.rb 和 README.md"
+            echo "不允许的文件:"
+            echo "$changed_files" | grep -v -E '^(Casks/.*\.rb|README\.md)$'
+            exit 1
+          fi
+
+          # 检查是否包含敏感信息
+          echo "🔍 检查敏感信息..."
+          if git diff origin/main...HEAD | grep -iE '(password|secret|token|api_key|private_key)'; then
+            echo "❌ 检测到可能的敏感信息泄露"
+            exit 1
+          fi
+
+          # 检查文件大小
+          echo "📏 检查文件大小..."
+          for file in $changed_files; do
+            file_size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo 0)
+            if [[ -f "$file" && $file_size -gt 10240 ]]; then
+              echo "⚠️ 文件 $file 过大 (>10KB)，请检查是否包含不必要的内容"
+            fi
+          done
+
+          echo "✅ PR 安全性验证通过"
+
+      - name: Cache Homebrew
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/Homebrew
+            /home/linuxbrew/.linuxbrew/var/homebrew/locks
+            /home/linuxbrew/.linuxbrew/Library/Taps
+          key: homebrew-${{ runner.os }}-${{ hashFiles('Casks/*.rb') }}
+          restore-keys: |
+            homebrew-${{ runner.os }}-
+
+      - name: 设置 Homebrew 环境
         uses: Homebrew/actions/setup-homebrew@main
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_TOKEN }}
+        env:
+          HOMEBREW_NO_ANALYTICS: 1
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSECURE_REDIRECT: 1
 
-      - name: Set up git
+      - name: 配置 Git 用户信息
         uses: Homebrew/actions/git-user-config@main
 
-      - name: Pull bottles
+      - name: 拉取预编译包 (bottles)
         env:
-          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GH_TOKEN }}
           PULL_REQUEST: ${{ github.event.pull_request.number }}
-        run: brew pr-pull --debug --tap="$GITHUB_REPOSITORY" "$PULL_REQUEST"
+        run: |
+          echo "📦 正在拉取 PR #$PULL_REQUEST 的预编译包..."
+          set -e
 
-      - name: Push commits
+          # 执行 brew pr-pull 命令
+          if brew pr-pull --debug --tap="$GITHUB_REPOSITORY" "$PULL_REQUEST"; then
+            echo "✅ 预编译包拉取成功"
+          else
+            echo "❌ 预编译包拉取失败"
+            exit 1
+          fi
+
+      - name: 推送提交到主分支
         uses: Homebrew/actions/git-try-push@main
         with:
           branch: main
+        id: push_commits
 
-      - name: Delete branch
-        if: github.event.pull_request.head.repo.fork == false
+      - name: 验证推送结果
+        run: |
+          echo "🔍 验证推送结果..."
+          if git log --oneline -1; then
+            echo "✅ 提交已成功推送到主分支"
+          else
+            echo "❌ 推送验证失败"
+            exit 1
+          fi
+
+      - name: 删除功能分支
+        if: github.event.pull_request.head.repo.fork == false && steps.push_commits.outcome == 'success'
         env:
           BRANCH: ${{ github.event.pull_request.head.ref }}
-        run: git push --delete origin "$BRANCH"
+        run: |
+          echo "🗑️ 正在删除分支: $BRANCH"
+          if git push --delete origin "$BRANCH"; then
+            echo "✅ 分支 $BRANCH 已成功删除"
+          else
+            echo "⚠️ 分支删除失败，可能已被删除或不存在"
+          fi
+
+      - name: 添加成功评论
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🎉 **PR 发布成功！**\n\n✅ 预编译包已成功拉取并合并到主分支\n' +
+                '✅ 相关分支已清理完成\n\n感谢您的贡献！'
+            });
+
+      - name: 添加失败评论
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **PR 发布失败！**\n\n请检查工作流日志以了解详细错误信息。\n\n' +
+                '可能的原因：\n- 预编译包拉取失败\n- 推送冲突\n- 权限问题\n\n' +
+                '请修复问题后重新添加 `pr-pull` 标签。'
+            });

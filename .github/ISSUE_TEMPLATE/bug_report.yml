@@ -1,0 +1,149 @@
+---
+name: 🐛 Bug 报告
+description: 报告一个问题或错误
+title: "[Bug]: "
+labels: [bug, needs-triage]
+assignees:
+  - gandli
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢您报告问题！请填写以下信息以帮助我们更好地理解和解决问题。
+
+  - type: dropdown
+    id: cask
+    attributes:
+      label: 相关 Cask
+      description: 选择遇到问题的 Cask（如果适用）
+      options:
+        - 不适用
+        - clash-nyanpasu
+        - clash-verge-rev
+        - clashx-meta
+        - flclash
+        - hiddify
+        - mihomo-party
+        - qv2ray
+        - sfm
+        - v2rayn
+        - v2rayu
+        - 其他（请在描述中说明）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: 问题类型
+      description: 选择最符合的问题类型
+      options:
+        - 安装失败
+        - 版本过期
+        - 下载链接失效
+        - 应用无法启动
+        - 卸载不完整
+        - 架构不兼容
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 详细描述遇到的问题
+      placeholder: |
+        请详细描述：
+        1. 您尝试做什么？
+        2. 发生了什么？
+        3. 您期望发生什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 重现步骤
+      description: 提供重现问题的详细步骤
+      placeholder: |
+        1. 执行命令 '...'
+        2. 点击 '...'
+        3. 看到错误 '...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: error_output
+    attributes:
+      label: 错误输出
+      description: 粘贴完整的错误信息或日志
+      render: shell
+      placeholder: |
+        请粘贴完整的错误信息，包括：
+        - 命令行输出
+        - 错误代码
+        - 相关日志
+
+  - type: dropdown
+    id: os_version
+    attributes:
+      label: macOS 版本
+      description: 您使用的 macOS 版本
+      options:
+        - macOS 14 (Sonoma)
+        - macOS 13 (Ventura)
+        - macOS 12 (Monterey)
+        - macOS 11 (Big Sur)
+        - macOS 10.15 (Catalina)
+        - 其他（请在描述中说明）
+    validations:
+      required: true
+
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: 处理器架构
+      description: 您的 Mac 使用的处理器类型
+      options:
+        - Apple Silicon (M1/M2/M3)
+        - Intel
+        - 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: homebrew_version
+    attributes:
+      label: Homebrew 版本
+      description: 运行 `brew --version` 获取版本信息
+      placeholder: "例如: Homebrew 4.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: 额外信息
+      description: 任何其他可能有助于解决问题的信息
+      placeholder: |
+        - 是否在虚拟机中运行？
+        - 是否使用了代理？
+        - 是否修改过系统设置？
+        - 其他相关软件版本
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 确认
+      description: 请确认您已经完成以下检查
+      options:
+        - label: 我已经搜索了现有的 Issues，确认这不是重复问题
+          required: true
+        - label: 我已经尝试更新 Homebrew 到最新版本
+          required: true
+        - label: 我已经尝试运行 `brew doctor` 检查系统状态
+          required: true
+        - label: 我提供的信息准确完整
+          required: true

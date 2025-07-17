@@ -1,0 +1,204 @@
+# 格式规范统一标准
+
+本文档描述了项目中各种代码质量工具的统一配置标准，解决了之前存在的格式规范冲突问题。
+
+## 修复的冲突问题
+
+### 1. 行长度限制统一
+
+**问题**: 不同工具的行长度限制不一致
+
+- yamllint: 200 字符
+- markdownlint: 120 字符  
+- rubocop: 120 字符
+
+**解决方案**: 统一设置为 120 字符
+
+- ✅ yamllint: `max: 120`
+- ✅ markdownlint: `line_length: 120`
+- ✅ rubocop: `Max: 120`
+
+### 2. 缩进规则统一
+
+**标准**: 所有配置文件使用 2 个空格缩进
+
+- ✅ YAML 文件: 2 个空格
+- ✅ Ruby 文件: 2 个空格
+- ✅ Markdown 文件: 2 个空格（列表缩进）
+
+### 3. Pre-commit 工具配置优化
+
+**改进**:
+
+- 🔧 RuboCop: 使用 `--auto-correct-all` 替代 `--auto-correct`
+- 🔧 Markdownlint: 添加 `--fix` 参数自动修复
+- 🔧 Commitizen: 添加 `always_run` 和 `pass_filenames` 配置
+
+### 4. GitHub Actions 版本更新
+
+**升级**:
+
+- 🆙 Python setup: v4 → v5，版本指定为 3.11
+- 🆙 Node.js: 18 → 20
+- 🆙 Cache action: v3 → v4，添加恢复键
+- 🆙 Upload artifact: v3 → v4，添加保留期限
+
+## 统一配置标准
+
+### 行长度
+
+```yaml
+最大行长度: 120 字符
+例外情况:
+  - URL 链接
+  - SHA256 哈希值
+  - 长注释行
+  - Cask 文件中的特定字段
+```
+
+### 缩进
+
+```yaml
+缩进标准: 2 个空格
+适用范围:
+  - YAML 文件
+  - Ruby 文件
+  - Markdown 列表
+  - JSON 文件
+```
+
+### 尾随空格
+
+```yaml
+规则: 移除所有尾随空格
+例外: Markdown 中的换行标记
+```
+
+### 文件结尾
+
+```yaml
+规则: 所有文件以换行符结尾
+检查工具: pre-commit end-of-file-fixer
+```
+
+## 工具配置文件
+
+### 主要配置文件
+
+- `.pre-commit-config.yaml` - Pre-commit 钩子配置
+- `.yamllint.yml` - YAML 文件检查配置
+- `.markdownlint.json` - Markdown 文件检查配置
+- `.rubocop.yml` - Ruby 代码检查配置
+- `.shellcheckrc` - Shell 脚本检查配置
+
+### 配置继承关系
+
+```text
+.rubocop.yml
+├── inherit_from: .rubocop_todo.yml
+└── 项目特定规则
+
+.pre-commit-config.yaml
+├── 调用所有工具
+└── 统一参数配置
+```
+
+## 使用指南
+
+### 本地开发
+
+```bash
+# 安装 pre-commit
+pip install pre-commit
+
+# 安装钩子
+pre-commit install
+
+# 手动运行所有检查
+pre-commit run --all-files
+```
+
+### CI/CD 流程
+
+```bash
+# GitHub Actions 自动运行
+# 包含所有质量检查工具
+# 生成质量报告
+```
+
+### 修复常见问题
+
+```bash
+# 自动修复 Ruby 代码
+rubocop --auto-correct-all
+
+# 自动修复 Markdown
+markdownlint --fix .
+
+# 检查 YAML 语法
+yamllint .
+
+# 检查 Shell 脚本
+shellcheck .github/scripts/*.sh
+```
+
+## 最佳实践
+
+### 1. 提交前检查
+
+- 确保 pre-commit 钩子已安装
+- 运行 `pre-commit run --all-files` 检查所有文件
+- 修复所有报告的问题
+
+### 2. 配置文件维护
+
+- 定期更新工具版本
+- 保持配置文件同步
+- 记录重要的配置变更
+
+### 3. 团队协作
+
+- 所有团队成员使用相同的配置
+- 在 PR 中检查格式规范
+- 及时修复 CI 中的格式问题
+
+## 故障排除
+
+### 常见错误
+
+1. **行长度超限**
+
+   ```text
+   解决: 重构长行或添加例外规则
+   ```
+
+2. **缩进不一致**
+
+   ```text
+   解决: 使用编辑器的格式化功能
+   ```
+
+3. **尾随空格**
+
+   ```text
+   解决: 配置编辑器自动移除尾随空格
+   ```
+
+4. **Pre-commit 失败**
+
+   ```bash
+   # 清理缓存重新安装
+   pre-commit clean
+   pre-commit install
+   ```
+
+### 获取帮助
+
+- 查看具体工具的文档
+- 检查 GitHub Actions 日志
+- 运行本地测试确认问题
+
+---
+
+*最后更新: 2024年*
+*维护者: 项目团队*

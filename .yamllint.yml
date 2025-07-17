@@ -1,0 +1,104 @@
+---
+# yamllint 配置文件
+# 用于检查 YAML 文件的格式和语法
+
+rules:
+  # 大括号规则
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+
+  # 中括号规则
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 0
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+
+  # 冒号规则
+  colons:
+    max-spaces-before: 0
+    max-spaces-after: 1
+
+  # 逗号规则
+  commas:
+    max-spaces-before: 0
+    min-spaces-after: 1
+    max-spaces-after: 1
+
+  # 注释规则
+  comments:
+    min-spaces-from-content: 1
+
+  # 注释缩进
+  comments-indentation: enable
+
+  # 文档开始标记
+  document-start:
+    present: true
+
+  # 文档结束标记
+  document-end:
+    present: false
+
+  # 空行规则
+  empty-lines:
+    max: 2
+    max-start: 0
+    max-end: 1
+
+  # 空值规则
+  empty-values:
+    forbid-in-block-mappings: true
+    forbid-in-flow-mappings: true
+
+  # 连字符规则
+  hyphens:
+    max-spaces-after: 1
+
+  # 缩进规则
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+
+  # 键重复检查
+  key-duplicates: enable
+
+  # 键排序（在某些情况下禁用）
+  key-ordering: disable
+
+  # 行长度限制（与其他工具保持一致）
+  line-length:
+    max: 120
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+
+  # 新行规则
+  new-line-at-end-of-file: enable
+
+  # 八进制值检查
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+
+  # 引号规则
+  quoted-strings:
+    quote-type: any
+    required: only-when-needed
+
+  # 尾随空格
+  trailing-spaces: enable
+
+  # 真假值规则
+  truthy:
+    allowed-values: ['true', 'false', 'yes', 'no']
+    check-keys: true
+
+# 忽略的文件和目录
+ignore: |
+  .github/dependabot.yml
+  node_modules/
+  .git/

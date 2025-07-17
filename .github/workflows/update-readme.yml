@@ -1,0 +1,202 @@
+---
+name: Update README
+
+'on':
+  push:
+    branches:
+      - main
+    paths:
+      - Casks/*.rb
+  pull_request:
+    branches:
+      - main
+    paths:
+      - Casks/*.rb
+  workflow_dispatch: {}
+  schedule:
+    # 每天 UTC 时间 02:00 运行（北京时间 10:00）
+    - cron: 0 2 * * *
+
+# 防止并发执行
+concurrency:
+  group: update-readme
+  cancel-in-progress: true
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: 检出代码仓库
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: 设置 Git 配置
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: 生成 Casks 列表并更新 README
+        run: |
+          echo "📝 正在生成 Casks 列表..."
+
+          # 创建临时文件存储应用程序表格内容
+          temp_table="/tmp/app_table.md"
+
+          # 生成表格头部
+          cat > "$temp_table" << 'EOF'
+          | 应用名称 | 描述 | 版本 | 安装命令 | 主页 |
+          |---------|------|------|----------|------|
+          EOF
+
+          # 遍历所有 Cask 文件并提取信息
+          for cask_file in Casks/*.rb; do
+            if [ -f "$cask_file" ]; then
+              # 提取 Cask 名称（文件名去掉 .rb 扩展名）
+              cask_name=$(basename "$cask_file" .rb)
+
+              # 提取应用程序显示名称
+              display_name=$(grep -E '^[[:space:]]*name[[:space:]]+".*"' "$cask_file" |
+                sed -E 's/^[[:space:]]*name[[:space:]]+"(.*)".*$/\1/' | head -1)
+              if [ -z "$display_name" ]; then
+                display_name="$cask_name"
+              fi
+
+              # 提取描述
+              description=$(grep -E '^[[:space:]]*desc[[:space:]]+".*"' "$cask_file" |
+                sed -E 's/^[[:space:]]*desc[[:space:]]+"(.*)".*$/\1/' | head -1)
+              if [ -z "$description" ]; then
+                description="-"
+              fi
+
+              # 提取版本
+              version=$(grep -E '^[[:space:]]*version[[:space:]]+".*"' "$cask_file" |
+                sed -E 's/^[[:space:]]*version[[:space:]]+"(.*)".*$/\1/' | head -1)
+              if [ -z "$version" ]; then
+                version="-"
+              fi
+
+              # 提取主页
+              homepage=$(grep -E '^[[:space:]]*homepage[[:space:]]+".*"' "$cask_file" |
+                sed -E 's/^[[:space:]]*homepage[[:space:]]+"(.*)".*$/\1/' | head -1)
+              if [ -z "$homepage" ]; then
+                homepage="-"
+              else
+                homepage="[🔗]($homepage)"
+              fi
+
+              # 生成安装命令
+              install_command="\`brew install gandli/proxy/$cask_name\`"
+
+              # 添加到表格中
+              echo "| **$display_name** | $description | \`$version\` | $install_command | $homepage |" >> "$temp_table"
+            fi
+          done
+
+          # 备份原始 README.md
+          cp README.md README.md.backup
+
+          # 使用 awk 替换应用程序表格部分
+          # 查找 "## 📦 应用程序" 到下一个 "##" 之间的内容并替换
+          awk '
+          BEGIN { in_apps_section = 0; table_replaced = 0 }
+          /^## 📦 应用程序/ {
+            print $0
+            print ""
+            # 读取并插入新的表格内容
+            while ((getline line < "/tmp/app_table.md") > 0) {
+              print line
+            }
+            close("/tmp/app_table.md")
+            in_apps_section = 1
+            table_replaced = 1
+            next
+          }
+          /^## / && in_apps_section && table_replaced {
+            in_apps_section = 0
+            print ""
+            print $0
+            next
+          }
+          !in_apps_section || !table_replaced {
+            print $0
+          }
+          ' README.md.backup > README.md
+
+          # 清理临时文件
+          rm -f "$temp_table" README.md.backup
+
+          echo "✅ README.md 应用程序部分已更新"
+
+      - name: 检查是否有变更
+        id: check_changes
+        run: |
+          if git diff --quiet README.md; then
+            echo "📋 README.md 没有变更"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "📝 检测到 README.md 变更"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+
+            echo "变更内容："
+            git diff README.md
+          fi
+
+      - name: 提交变更
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git add README.md
+          git commit -m "🤖 自动更新 README.md 中的 Casks 列表
+
+          - 更新应用程序列表
+          - 同步版本信息
+          - 更新描述和链接
+
+          由 GitHub Actions 自动生成"
+
+          echo "✅ 变更已提交"
+
+      - name: 推送变更
+        if: steps.check_changes.outputs.has_changes == 'true' && github.event_name != 'pull_request'
+        run: |
+          git push origin main
+          echo "🚀 变更已推送到主分支"
+
+      - name: 创建 Pull Request（如果是 PR 触发）
+        if: steps.check_changes.outputs.has_changes == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '🤖 **自动更新提醒**\n\n检测到 Casks 文件变更，' +
+                'README.md 已自动更新以反映最新的应用程序列表。\n\n📝 变更内容：\n' +
+                '- 更新应用程序列表\n- 同步版本信息\n- 更新描述和链接\n\n' +
+                '✅ 请检查更新后的 README.md 文件。'
+            });
+
+      - name: 输出总结
+        run: |
+          echo "📊 工作流执行总结："
+          echo "- 触发事件: ${{ github.event_name }}"
+          echo "- 分支: ${{ github.ref_name }}"
+          echo "- 是否有变更: ${{ steps.check_changes.outputs.has_changes }}"
+
+          if [ "${{ steps.check_changes.outputs.has_changes }}" = "true" ]; then
+            echo "✅ README.md 已成功更新"
+          else
+            echo "ℹ️ README.md 无需更新"
+          fi

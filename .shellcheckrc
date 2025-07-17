@@ -1,0 +1,34 @@
+# ShellCheck 配置文件
+# 用于检查 shell 脚本的质量和安全性
+
+# 禁用的检查规则
+# SC1091: 不检查 source 的文件是否存在（在某些情况下文件可能动态生成）
+disable=SC1091
+
+# SC2034: 允许未使用的变量（某些变量可能用于模板或配置）
+# disable=SC2034
+
+# SC2086: 允许不带引号的变量扩展（在某些特定情况下需要）
+# disable=SC2086
+
+# SC2155: 允许在声明时赋值（declare -x var=$(cmd)）
+# disable=SC2155
+
+# 启用的外部源
+# 允许检查通过网络获取的脚本
+# external-sources=true
+
+# 设置 shell 方言
+# 可选值: sh, bash, dash, ksh
+shell=bash
+
+# 排除的文件模式
+# exclude-dir=.git
+# exclude-dir=node_modules
+
+# 严格性级别
+# error: 只显示错误
+# warning: 显示警告和错误
+# info: 显示所有信息
+# style: 显示样式建议
+severity=warning

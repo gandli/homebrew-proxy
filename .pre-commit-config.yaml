@@ -1,0 +1,92 @@
+---
+# Pre-commit 配置文件
+# 用于在提交前自动运行代码质量检查
+
+repos:
+  # 通用代码质量检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # 检查文件是否以换行符结尾
+      - id: end-of-file-fixer
+      # 移除尾随空格
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      # 检查合并冲突标记
+      - id: check-merge-conflict
+      # 检查 YAML 语法
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      # 检查 JSON 语法
+      - id: check-json
+      # 检查大文件
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      # 检查可执行文件是否有 shebang
+      - id: check-executables-have-shebangs
+      # 检查 shebang 文件是否可执行
+      - id: check-shebang-scripts-are-executable
+      # 修复混合行尾符
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # Ruby 代码检查（用于 Cask 文件）
+  - repo: https://github.com/rubocop/rubocop
+    rev: v1.78.0
+    hooks:
+      - id: rubocop
+        args: [--autocorrect-all]
+        files: \.rb$
+
+  # Shell 脚本检查
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning]
+
+  # Markdown 检查
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.45.0
+    hooks:
+      - id: markdownlint
+        args: [--config, .markdownlint.json, --fix]
+
+  # YAML 检查
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        args: [--config-file, .yamllint.yml]
+
+  # 提交信息检查
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.8.3
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+        always_run: true
+        pass_filenames: false
+
+# 默认安装的钩子
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+  - pre-push
+
+# 默认阶段
+default_stages:
+  - pre-commit
+
+# CI 配置
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

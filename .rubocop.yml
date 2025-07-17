@@ -1,0 +1,157 @@
+---
+# RuboCop 配置文件
+# 用于检查 Ruby 代码（主要是 Cask 文件）的质量
+
+# 继承默认配置
+inherit_from: .rubocop_todo.yml
+
+# 禁用插件（避免加载不存在的插件）
+require: []
+
+# 禁用插件自动加载
+plugins: []
+
+# 包含和排除的文件
+AllCops:
+  # 目标 Ruby 版本
+  TargetRubyVersion: 3.0
+  # 包含的文件模式
+  Include:
+    - '**/*.rb'
+    - Casks/**/*
+  # 排除的文件和目录
+  Exclude:
+    - vendor/**/*
+    - node_modules/**/*
+    - .git/**/*
+    - tmp/**/*
+  # 新的 cops 默认启用
+  NewCops: enable
+  # 显示 cop 名称
+  DisplayCopNames: true
+  # 显示样式指南 URL
+  DisplayStyleGuide: true
+
+# 布局相关规则
+# Layout/LineLength 配置移至文件末尾统一处理
+
+# 缩进规则（与 YAML 和其他配置保持一致）
+Layout/IndentationWidth:
+  Width: 2
+
+# 数组和哈希的缩进
+Layout/FirstArrayElementIndentation:
+  EnforcedStyle: consistent
+
+Layout/FirstHashElementIndentation:
+  EnforcedStyle: consistent
+
+# 尾随逗号
+Style/TrailingCommaInArrayLiteral:
+  EnforcedStyleForMultiline: consistent_comma
+
+Style/TrailingCommaInHashLiteral:
+  EnforcedStyleForMultiline: consistent_comma
+
+# 字符串引号
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+# 哈希语法
+Style/HashSyntax:
+  EnforcedStyle: ruby19
+
+# 方法调用括号
+Style/MethodCallWithoutArgsParentheses:
+  Enabled: true
+
+# 文档注释
+Style/Documentation:
+  Enabled: false
+
+# 冻结字符串字面量
+Style/FrozenStringLiteralComment:
+  Enabled: false
+
+# 类和模块长度
+Metrics/ClassLength:
+  Max: 200
+
+Metrics/ModuleLength:
+  Max: 200
+
+# 方法长度
+Metrics/MethodLength:
+  Max: 50
+
+# 块长度
+Metrics/BlockLength:
+  Max: 100
+  Exclude:
+    - Casks/**/*
+
+# 参数个数
+Metrics/ParameterLists:
+  Max: 8
+
+# ABC 复杂度
+Metrics/AbcSize:
+  Max: 30
+
+# 循环复杂度
+Metrics/CyclomaticComplexity:
+  Max: 10
+
+# 感知复杂度
+Metrics/PerceivedComplexity:
+  Max: 10
+
+# Cask 特定规则
+# 允许 Cask DSL 方法
+Lint/MissingSuper:
+  Exclude:
+    - Casks/**/*
+
+Style/MissingRespondToMissing:
+  Exclude:
+    - Casks/**/*
+
+# 行长度配置（统一配置，与其他工具保持一致）
+Layout/LineLength:
+  Max: 120
+  AllowedPatterns:
+    - ^\s*#.*$
+    - ^\s*url\s+
+    - ^\s*sha256\s+
+    - ^\s*version\s+
+    - ^\s*homepage\s+
+    - ^\s*desc\s+
+  Exclude:
+    - Casks/**/*
+
+# 允许 Cask 中的特殊语法
+Style/SymbolArray:
+  Exclude:
+    - Casks/**/*
+
+Style/WordArray:
+  Exclude:
+    - Casks/**/*
+
+# 禁用某些在 Cask 中不适用的规则
+Style/GlobalVars:
+  Exclude:
+    - Casks/**/*
+
+Style/ClassVars:
+  Exclude:
+    - Casks/**/*
+
+# 命名约定
+Naming/FileName:
+  Exclude:
+    - Casks/**/*
+
+Naming/MethodName:
+  Exclude:
+    - Casks/**/*

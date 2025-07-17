@@ -1,0 +1,12 @@
+---
+extends: default
+
+rules:
+  line-length:
+    max: 200
+  quoted-strings:
+    quote-type: any
+    required: only-when-needed
+  empty-values:
+    forbid-in-block-mappings: false
+    forbid-in-flow-mappings: false
