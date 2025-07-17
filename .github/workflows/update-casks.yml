@@ -79,36 +79,42 @@ jobs:
               local download_url=""
               
               case "$strategy_type" in
-                "cask_original")
-                  # 优先匹配当前架构
-                  download_url=$(echo "$latest_release" | \
-                    jq -r ".assets[] | select(.name | test(\".*$search_term.*_$current_arch\\.$file_ext\")) | .browser_download_url" | head -1)
-                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                    # 通用匹配
+                 "cask_original")
+                    # 优先匹配当前架构（大小写不敏感）
                     download_url=$(echo "$latest_release" | \
-                      jq -r ".assets[] | select(.name | test(\".*$search_term.*\\.$file_ext\")) | .browser_download_url" | head -1)
-                  fi
-                  ;;
-                "cask_dots"|"partial_dots")
-                  # 优先匹配当前架构
-                  download_url=$(echo "$latest_release" | \
-                    jq -r ".assets[] | select(.name | test(\".*$search_term.*_$current_arch\\.$file_ext\")) | .browser_download_url" | head -1)
-                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                    # 通用匹配
+                      jq -r --arg term "$search_term" --arg arch "$current_arch" --arg ext "$file_ext" \
+                        '.assets[] | select(.name | test(".*" + $term + ".*_" + $arch + "\\." + $ext; "i")) | .browser_download_url' | head -1)
+                    if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                      # 通用匹配（大小写不敏感）
+                      download_url=$(echo "$latest_release" | \
+                        jq -r --arg term "$search_term" --arg ext "$file_ext" \
+                          '.assets[] | select(.name | test(".*" + $term + ".*\\." + $ext; "i")) | .browser_download_url' | head -1)
+                    fi
+                    ;;
+                  "cask_dots"|"partial_dots")
+                    # 优先匹配当前架构（大小写不敏感）
                     download_url=$(echo "$latest_release" | \
-                      jq -r ".assets[] | select(.name | test(\".*$search_term.*\\.$file_ext\")) | .browser_download_url" | head -1)
-                  fi
-                  ;;
-                "app_name")
-                  # 应用名称匹配
-                  download_url=$(echo "$latest_release" | \
-                    jq -r ".assets[] | select(.name | test(\".*$search_term.*\\.$file_ext\")) | .browser_download_url" | head -1)
-                  ;;
-                "arch_specific")
-                  # 架构特定匹配
-                  download_url=$(echo "$latest_release" | \
-                    jq -r ".assets[] | select(.name | test(\".*_$search_term\\.$file_ext\")) | .browser_download_url" | head -1)
-                  ;;
+                      jq -r --arg term "$search_term" --arg arch "$current_arch" --arg ext "$file_ext" \
+                        '.assets[] | select(.name | test(".*" + $term + ".*_" + $arch + "\\." + $ext; "i")) | .browser_download_url' | head -1)
+                    if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                      # 通用匹配（大小写不敏感）
+                      download_url=$(echo "$latest_release" | \
+                        jq -r --arg term "$search_term" --arg ext "$file_ext" \
+                          '.assets[] | select(.name | test(".*" + $term + ".*\\." + $ext; "i")) | .browser_download_url' | head -1)
+                    fi
+                    ;;
+                  "app_name")
+                    # 应用名称匹配（大小写不敏感）
+                    download_url=$(echo "$latest_release" | \
+                      jq -r --arg term "$search_term" --arg ext "$file_ext" \
+                        '.assets[] | select(.name | test(".*" + $term + ".*\\." + $ext; "i")) | .browser_download_url' | head -1)
+                    ;;
+                  "arch_specific")
+                    # 架构特定匹配（大小写不敏感）
+                    download_url=$(echo "$latest_release" | \
+                      jq -r --arg term "$search_term" --arg ext "$file_ext" \
+                        '.assets[] | select(.name | test(".*_" + $term + "\\." + $ext; "i")) | .browser_download_url' | head -1)
+                    ;;
               esac
               
               if [[ -n "$download_url" && "$download_url" != "null" ]]; then
