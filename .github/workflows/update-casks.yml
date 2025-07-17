@@ -501,28 +501,90 @@ jobs:
                 echo "   可用资产:"
                 echo "$latest_release" | jq -r '.assets[].name' | sed 's/^/     - /'
 
-                # 尝试最后的通用匹配策略
-                echo "🔄 尝试最终回退匹配..."
-                # 创建多个搜索模式来处理不同的命名约定
-                search_patterns=(
-                  "$base_name"                    # 原始名称: clash-nyanpasu
-                  "$(echo "$base_name" | tr '-' '.')"  # 替换连字符为点: clash.nyanpasu
-                  "$(echo "$base_name" | tr '-' '_')"  # 替换连字符为下划线: clash_nyanpasu
+                # 智能多轮回退匹配策略
+                echo "🔄 启动智能回退匹配..."
+                
+                # 第一步：提取应用名称和架构信息
+                app_line=$(grep -E '^\s*app\s+' "$cask_file" | head -1)
+                app_name=""
+                if [[ "$app_line" =~ [[:space:]]*app[[:space:]]+\"([^\"]+)\"\.app ]]; then
+                  app_name="${BASH_REMATCH[1]}"
+                  echo "📱 提取应用名称: '$app_name'" >&2
+                fi
+                
+                # 获取当前架构
+                current_arch="aarch64"  # 默认为 arm64
+                if [[ "$(uname -m)" == "x86_64" ]]; then
+                  current_arch="x64"
+                fi
+                echo "🏗️ 当前架构: $current_arch" >&2
+                
+                # 第二步：构建智能搜索模式
+                declare -a search_strategies
+                
+                # 策略1：基于应用名称的精确匹配
+                if [[ -n "$app_name" ]]; then
+                  app_base=$(echo "$app_name" | tr ' ' '.' | tr '[:upper:]' '[:lower:]')
+                  search_strategies+=(
+                    "exact_app:$app_base"
+                    "exact_app_arch:$app_base.*$current_arch"
+                  )
+                fi
+                
+                # 策略2：基于 cask 名称的变体匹配
+                cask_base=$(echo "$base_name" | tr '[:upper:]' '[:lower:]')
+                search_strategies+=(
+                  "cask_original:$cask_base"
+                  "cask_dots:$(echo "$cask_base" | tr '-' '.')"
+                  "cask_underscores:$(echo "$cask_base" | tr '-' '_')"
+                  "cask_arch:$cask_base.*$current_arch"
+                  "cask_dots_arch:$(echo "$cask_base" | tr '-' '.').*$current_arch"
                 )
                 
+                # 策略3：部分匹配（去除常见后缀）
+                if [[ "$cask_base" =~ (.+)-(rev|nightly|beta|alpha|dev)$ ]]; then
+                  partial_name="${BASH_REMATCH[1]}"
+                  search_strategies+=(
+                    "partial:$partial_name"
+                    "partial_dots:$(echo "$partial_name" | tr '-' '.')"
+                    "partial_arch:$partial_name.*$current_arch"
+                  )
+                fi
+                
+                # 第三步：多轮匹配执行
                 fallback_url=""
-                for pattern in "${search_patterns[@]}"; do
-                  echo "🎯 尝试匹配模式: '$pattern'" >&2
+                matched_strategy=""
+                
+                for strategy in "${search_strategies[@]}"; do
+                  strategy_name="${strategy%%:*}"
+                  pattern="${strategy#*:}"
+                  
+                  echo "🎯 尝试策略 [$strategy_name]: '$pattern'" >&2
+                  
+                  # 优先匹配当前架构的文件
                   fallback_url=$(echo "$latest_release" | \
-                    jq -r --arg pattern "$pattern" '
+                    jq -r --arg pattern "$pattern" --arg arch "$current_arch" '
                       .assets[] | 
-                      select(.name | ascii_downcase | contains($pattern | ascii_downcase)) | 
-                      select(.name | endswith(".dmg")) | 
+                      select(.name | ascii_downcase | test($pattern; "i")) |
+                      select(.name | endswith(".dmg")) |
+                      select(.name | contains($arch)) |
                       .browser_download_url
                     ' | head -1)
                   
+                  # 如果没找到架构特定的，尝试通用匹配
+                  if [[ -z "$fallback_url" || "$fallback_url" == "null" ]]; then
+                    fallback_url=$(echo "$latest_release" | \
+                      jq -r --arg pattern "$pattern" '
+                        .assets[] | 
+                        select(.name | ascii_downcase | test($pattern; "i")) |
+                        select(.name | endswith(".dmg")) |
+                        .browser_download_url
+                      ' | head -1)
+                  fi
+                  
                   if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
-                    echo "✅ 找到匹配，使用模式: '$pattern'" >&2
+                    matched_strategy="$strategy_name"
+                    echo "✅ 匹配成功，策略: [$strategy_name], 模式: '$pattern'" >&2
                     break
                   fi
                 done
