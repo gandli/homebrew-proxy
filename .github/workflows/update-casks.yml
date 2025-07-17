@@ -507,9 +507,9 @@ jobs:
                 escaped_base_name=$(echo "$base_name" | sed 's/-/[-_]/g')
                 fallback_pattern=".*$escaped_base_name.*\\.(dmg|zip|pkg)"
                 echo "🎯 回退匹配模式: $fallback_pattern" >&2
-                # 匹配任何包含应用名称的 macOS 文件
+                # 匹配任何包含应用名称的 macOS 文件（大小写不敏感）
                 fallback_url=$(echo "$latest_release" | \
-                  jq -r --arg pattern "$fallback_pattern" '.assets[] | select(.name | test($pattern)) | \
+                  jq -r --arg pattern "$fallback_pattern" '.assets[] | select(.name | test($pattern; "i")) | \
                     .browser_download_url' | \
                   head -1)
 
