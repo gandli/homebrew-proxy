@@ -503,15 +503,29 @@ jobs:
 
                 # 尝试最后的通用匹配策略
                 echo "🔄 尝试最终回退匹配..."
-                # 处理带连字符的应用名称，将连字符替换为可选的连字符或下划线
-                escaped_base_name=$(echo "$base_name" | sed 's/-/[-_]/g')
-                fallback_pattern=".*$escaped_base_name.*\\.(dmg|zip|pkg)"
-                echo "🎯 回退匹配模式: $fallback_pattern" >&2
-                # 匹配任何包含应用名称的 macOS 文件（大小写不敏感）
-                fallback_url=$(echo "$latest_release" | \
-                  jq -r --arg pattern "$fallback_pattern" '.assets[] | select(.name | test($pattern; "i")) | \
-                    .browser_download_url' | \
-                  head -1)
+                # 创建多个搜索模式来处理不同的命名约定
+                search_patterns=(
+                  "$base_name"                    # 原始名称: clash-nyanpasu
+                  "$(echo "$base_name" | tr '-' '.')"  # 替换连字符为点: clash.nyanpasu
+                  "$(echo "$base_name" | tr '-' '_')"  # 替换连字符为下划线: clash_nyanpasu
+                )
+                
+                fallback_url=""
+                for pattern in "${search_patterns[@]}"; do
+                  echo "🎯 尝试匹配模式: '$pattern'" >&2
+                  fallback_url=$(echo "$latest_release" | \
+                    jq -r --arg pattern "$pattern" '
+                      .assets[] | 
+                      select(.name | ascii_downcase | contains($pattern | ascii_downcase)) | 
+                      select(.name | endswith(".dmg")) | 
+                      .browser_download_url
+                    ' | head -1)
+                  
+                  if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
+                    echo "✅ 找到匹配，使用模式: '$pattern'" >&2
+                    break
+                  fi
+                done
 
                 if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
                   download_url="$fallback_url"
