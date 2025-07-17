@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      force_recreate:
+        description: '强制重新创建已存在的 Release'
+        required: false
+        type: boolean
+        default: false
   schedule:
     # 每月1号 UTC 时间 02:00 (北京时间 10:00) 自动创建 release
     - cron: '0 2 1 * *'
@@ -39,12 +44,20 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.0'
+          ruby-version: '3.2'
+          bundler-cache: true
       
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+          # 使用更高效的包管理器缓存
+          sudo apt-get update -qq
+          sudo apt-get install -y jq curl
+          
+          # 验证工具安装
+          echo "✅ 已安装工具版本:"
+          echo "- jq: $(jq --version)"
+          echo "- curl: $(curl --version | head -1)"
+          echo "- gh: $(gh --version | head -1)"
       
       - name: Generate version number
         id: version
@@ -65,11 +78,25 @@ jobs:
         id: check_release
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          FORCE_RECREATE="${{ github.event.inputs.force_recreate || 'false' }}"
+          
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "⚠️  Release $VERSION 已存在"
+            if [[ "$FORCE_RECREATE" == "true" ]]; then
+              echo "🔄 Release $VERSION 已存在，但将被强制重新创建"
+              echo "should_recreate=true" >> $GITHUB_OUTPUT
+              # 删除现有 Release
+              gh release delete "$VERSION" --yes || true
+              # 删除对应的 Git 标签
+              git tag -d "$VERSION" 2>/dev/null || true
+              git push origin --delete "$VERSION" 2>/dev/null || true
+            else
+              echo "⚠️  Release $VERSION 已存在"
+              echo "should_recreate=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "exists=false" >> $GITHUB_OUTPUT
+            echo "should_recreate=false" >> $GITHUB_OUTPUT
             echo "✅ Release $VERSION 不存在，可以创建"
           fi
         env:
@@ -88,9 +115,15 @@ jobs:
           for cask_file in Casks/*.rb; do
             if [ -f "$cask_file" ]; then
               app_name=$(basename "$cask_file" .rb)
-              version=$(grep -E '^\s*version\s+"' "$cask_file" | sed -E 's/.*version\s+"([^"]+)".*/\1/' | head -1)
-              desc=$(grep -E '^\s*desc\s+"' "$cask_file" | sed -E 's/.*desc\s+"([^"]+)".*/\1/' | head -1)
-              homepage=$(grep -E '^\s*homepage\s+"' "$cask_file" | sed -E 's/.*homepage\s+"([^"]+)".*/\1/' | head -1)
+              # 使用更健壮的正则表达式提取信息
+              version=$(grep -E '^\s*version\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+              desc=$(grep -E '^\s*desc\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+              homepage=$(grep -E '^\s*homepage\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+              
+              # 验证提取的信息
+              if [[ -z "$version" || -z "$desc" || -z "$homepage" ]]; then
+                echo "⚠️ 警告: $app_name 的某些信息缺失 (version: $version, desc: $desc, homepage: $homepage)"
+              fi
               
               APP_TABLE="$APP_TABLE\n| **$app_name** | $desc | \`$version\` | \`brew install gandli/proxy/$app_name\` | [🔗]($homepage) |"
               INSTALL_COMMANDS="$INSTALL_COMMANDS\nbrew install --cask $app_name"
@@ -210,8 +243,107 @@ jobs:
           echo "..."
           echo "----------------------------------------"
       
+      - name: Download and upload assets
+        id: assets
+        if: steps.check_release.outputs.exists == 'false' || steps.check_release.outputs.should_recreate == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          echo "📦 开始下载应用程序文件..."
+          
+          # 创建下载目录
+          mkdir -p downloads
+          
+          # 下载应用程序文件的函数
+          download_app_from_cask() {
+            local cask_file="$1"
+            local app_name=$(basename "$cask_file" .rb)
+            
+            echo "🔄 处理 $app_name..."
+            
+            # 提取版本号和 URL
+            local version=$(grep -E '^\s*version\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+            
+            if [[ -z "$version" ]]; then
+              echo "⚠️ 无法提取版本号: $app_name"
+              return 1
+            fi
+            
+            # 检查是否有多架构支持
+            if grep -q "arch arm:" "$cask_file"; then
+              # 多架构应用
+              local url_line=$(grep -E '^\s*url\s+"' "$cask_file" | head -1)
+              if [[ -n "$url_line" ]]; then
+                local base_url=$(echo "$url_line" | sed 's/.*"\([^"]*\)".*/\1/')
+                
+                # ARM 版本
+                local arm_arch=$(grep "arch arm:" "$cask_file" | sed -E 's/.*arch arm: "([^"]+)".*/\1/')
+                if [[ -n "$arm_arch" ]]; then
+                  local arm_url=$(echo "$base_url" | sed "s/#{version}/$version/g" | sed "s/#{arch}/$arm_arch/g")
+                  local arm_filename="${app_name}-${version}-arm64$(echo "$arm_url" | sed 's/.*\(\.[^.]*\)$/\1/')"
+                  
+                  echo "⬇️ 下载 ARM 版本: $arm_filename"
+                  if curl -L --fail --max-time 300 -o "downloads/$arm_filename" "$arm_url" 2>/dev/null; then
+                    echo "downloads/$arm_filename" >> asset_files.txt
+                    echo "✅ ARM 版本下载成功"
+                  else
+                    echo "❌ ARM 版本下载失败"
+                  fi
+                fi
+                
+                # Intel 版本
+                local intel_arch=$(grep "arch arm:" "$cask_file" | sed -E 's/.*intel: "([^"]+)".*/\1/')
+                if [[ -n "$intel_arch" ]]; then
+                  local intel_url=$(echo "$base_url" | sed "s/#{version}/$version/g" | sed "s/#{arch}/$intel_arch/g")
+                  local intel_filename="${app_name}-${version}-intel$(echo "$intel_url" | sed 's/.*\(\.[^.]*\)$/\1/')"
+                  
+                  echo "⬇️ 下载 Intel 版本: $intel_filename"
+                  if curl -L --fail --max-time 300 -o "downloads/$intel_filename" "$intel_url" 2>/dev/null; then
+                    echo "downloads/$intel_filename" >> asset_files.txt
+                    echo "✅ Intel 版本下载成功"
+                  else
+                    echo "❌ Intel 版本下载失败"
+                  fi
+                fi
+              fi
+            else
+              # 单一架构应用
+              local url=$(grep -E '^\s*url\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+              url=$(echo "$url" | sed "s/#{version}/$version/g")
+              
+              if [[ -n "$url" ]]; then
+                local filename="${app_name}-${version}$(echo "$url" | sed 's/.*\(\.[^.]*\)$/\1/')"
+                
+                echo "⬇️ 下载通用版本: $filename"
+                if curl -L --fail --max-time 300 -o "downloads/$filename" "$url" 2>/dev/null; then
+                  echo "downloads/$filename" >> asset_files.txt
+                  echo "✅ 通用版本下载成功"
+                else
+                  echo "❌ 通用版本下载失败"
+                fi
+              fi
+            fi
+          }
+          
+          # 初始化资产文件列表
+          > asset_files.txt
+          
+          # 下载所有应用程序
+          for cask_file in Casks/*.rb; do
+            if [[ -f "$cask_file" ]]; then
+              download_app_from_cask "$cask_file" || true
+            fi
+          done
+          
+          # 统计下载结果
+          ASSET_COUNT=$(wc -l < asset_files.txt || echo "0")
+          echo "asset_count=$ASSET_COUNT" >> $GITHUB_OUTPUT
+          echo "📊 成功下载 $ASSET_COUNT 个应用程序文件"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
       - name: Create release
-        if: steps.check_release.outputs.exists == 'false'
+        if: steps.check_release.outputs.exists == 'false' || steps.check_release.outputs.should_recreate == 'true'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           PRERELEASE="${{ github.event.inputs.prerelease || 'false' }}"
@@ -229,7 +361,24 @@ jobs:
             echo "📋 创建正式发布版本"
           fi
           
-          eval "gh release create \"$VERSION\" $RELEASE_ARGS"
+          # 准备资产文件参数
+          ASSET_FILES=""
+          if [[ -f "asset_files.txt" && -s "asset_files.txt" ]]; then
+            while IFS= read -r file; do
+              if [[ -f "$file" ]]; then
+                ASSET_FILES="$ASSET_FILES \"$file\""
+              fi
+            done < asset_files.txt
+          fi
+          
+          # 创建 Release
+          if [[ -n "$ASSET_FILES" ]]; then
+            eval "gh release create \"$VERSION\" $RELEASE_ARGS $ASSET_FILES"
+            echo "✅ Release 创建成功，包含 ${{ steps.assets.outputs.asset_count }} 个应用程序文件"
+          else
+            eval "gh release create \"$VERSION\" $RELEASE_ARGS"
+            echo "✅ Release 创建成功（无应用程序文件）"
+          fi
           
           echo "✅ Release $VERSION 创建成功！"
           echo "🔗 查看地址: https://github.com/${{ github.repository }}/releases/tag/$VERSION"
@@ -237,17 +386,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Skip release creation
-        if: steps.check_release.outputs.exists == 'true'
+        if: steps.check_release.outputs.exists == 'true' && steps.check_release.outputs.should_recreate == 'false'
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           echo "⏭️  跳过创建 Release，因为 $VERSION 已存在"
+          echo "💡 提示: 如需重新创建，请使用 'force_recreate' 选项"
           echo "🔗 现有 Release 地址: https://github.com/${{ github.repository }}/releases/tag/$VERSION"
       
       - name: Cleanup
         if: always()
         run: |
           echo "🧹 清理临时文件..."
-          rm -f app_table.txt install_commands.txt release_notes.md
+          rm -f app_table.txt install_commands.txt release_notes.md asset_files.txt
+          rm -rf downloads/
           echo "✅ 清理完成"
       
       - name: Summary
@@ -259,7 +410,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **版本号**: $VERSION" >> $GITHUB_STEP_SUMMARY
           echo "- **应用数量**: $APP_COUNT" >> $GITHUB_STEP_SUMMARY
-          echo "- **发布状态**: ${{ steps.check_release.outputs.exists == 'false' && '✅ 已创建' || '⏭️ 已跳过（已存在）' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **资产文件**: ${{ steps.assets.outputs.asset_count || '0' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **发布状态**: ${{ (steps.check_release.outputs.exists == 'false' || steps.check_release.outputs.should_recreate == 'true') && '✅ 已创建' || '⏭️ 已跳过（已存在）' }}" >> $GITHUB_STEP_SUMMARY
           echo "- **发布地址**: [查看 Release](https://github.com/${{ github.repository }}/releases/tag/$VERSION)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🚀 快速安装" >> $GITHUB_STEP_SUMMARY
