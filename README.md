@@ -1,4 +1,6 @@
-# 🍺 Homebrew Proxy Tap | 精选 macOS 代理工具全家桶 [![Update Casks](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml)
+# 🍺 Homebrew Proxy Tap | 精选 macOS 代理工具全家桶 
+
+[![Update Casks](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml) [![Create Release](https://github.com/gandli/homebrew-proxy/actions/workflows/create-release.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/create-release.yml) [![Latest Release](https://img.shields.io/github/v/release/gandli/homebrew-proxy?label=最新版本&color=blue)](https://github.com/gandli/homebrew-proxy/releases/latest)
 
 > 🚀 **精选 macOS 代理客户端集合** - 一键安装优质网络代理工具的 Homebrew Tap
 
@@ -47,11 +49,33 @@ cask "<cask_name>"
 brew bundle
 ```
 
+## 📦 Release 管理
+
+本项目支持自动化的 Release 创建，包含所有 Casks 应用程序的最新版本信息。
+
+### 🤖 自动创建 Release
+
+- **GitHub Actions**：访问 [Actions 页面](../../actions/workflows/create-release.yml) 手动触发
+- **定时发布**：每月1号自动创建新版本
+- **版本格式**：`v年.月.日`（如：v2024.01.15）
+
+### 🛠️ 手动创建 Release
+
+```bash
+# 使用本地脚本创建
+./create-release.sh
+```
+
+### 📋 详细指南
+
+查看 [Release 创建指南](RELEASE_GUIDE.md) 了解完整的创建流程和故障排除。
+
 ## 📚 文档
 
 - `brew help` - 查看 Homebrew 帮助
 - `man brew` - 查看 Homebrew 手册
 - [Homebrew 官方文档](https://docs.brew.sh) - 完整的 Homebrew 文档
+- [Release 创建指南](RELEASE_GUIDE.md) - Release 创建和管理指南
 
 ## 🤝 贡献
 
