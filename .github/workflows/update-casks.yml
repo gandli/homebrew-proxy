@@ -503,9 +503,13 @@ jobs:
 
                 # 尝试最后的通用匹配策略
                 echo "🔄 尝试最终回退匹配..."
+                # 处理带连字符的应用名称，将连字符替换为可选的连字符或下划线
+                escaped_base_name=$(echo "$base_name" | sed 's/-/[-_]/g')
+                fallback_pattern=".*$escaped_base_name.*\\.(dmg|zip|pkg)"
+                echo "🎯 回退匹配模式: $fallback_pattern" >&2
                 # 匹配任何包含应用名称的 macOS 文件
                 fallback_url=$(echo "$latest_release" | \
-                  jq -r --arg pattern ".*$base_name.*\\.(dmg|zip|pkg)" '.assets[] | select(.name | test($pattern)) | \
+                  jq -r --arg pattern "$fallback_pattern" '.assets[] | select(.name | test($pattern)) | \
                     .browser_download_url' | \
                   head -1)
 
@@ -590,22 +594,30 @@ jobs:
                 echo "   asset_pattern: '$asset_pattern'" >&2
               fi
 
-              # 检查资产模式是否被截断
-              if [[ ${#asset_pattern} -lt 10 ]]; then
-                echo "⚠️  警告: 资产模式似乎太短 (${#asset_pattern} 字符): '$asset_pattern'" >&2
-                echo "🔍 重新提取资产模式并显示详细输出..." >&2
+              # 检查资产模式是否被截断或有问题
+              if [[ ${#asset_pattern} -lt 10 || "$asset_pattern" == *"(aarch64" ]]; then
+                echo "⚠️  警告: 资产模式被截断或不完整 (${#asset_pattern} 字符): '$asset_pattern'" >&2
+                echo "🔍 重新提取完整的资产模式..." >&2
 
-                # 重新提取并显示详细过程
-                url_template=$(grep -E '^\s*url\s+' "$cask_file" | head -1)
-                echo "找到 URL 模板: $url_template" >&2
+                # 重新提取完整的 URL 模板
+                url_line=$(grep -E '^\s*url\s+' "$cask_file" | head -1)
+                echo "完整 URL 行: $url_line" >&2
 
-                filename_template=$(echo "$url_template" | sed -E 's/.*\/([^"]+)".*/\1/' | sed -E 's/#{[^}]+}/*/g')
-                echo "文件名模板: $filename_template" >&2
+                if [[ "$url_line" =~ url[[:space:]]+\"([^\"]+)\" ]]; then
+                  url_template="${BASH_REMATCH[1]}"
+                  filename=$(echo "$url_template" | sed -E 's/.*\///')
+                  echo "提取的文件名: $filename" >&2
 
-                # 重新生成资产模式
-                asset_pattern=$(echo "$filename_template" | \
-                  sed -E 's/\./\\./g' | sed -E 's/\*/[^/]+/g')
-                echo "重新生成的资产模式: $asset_pattern" >&2
+                  # 重新生成完整的资产模式
+                  if [[ "$filename" == *"#{version}"* && "$filename" == *"#{arch}"* ]]; then
+                    # 处理包含版本和架构变量的情况
+                    asset_pattern="$filename"
+                    asset_pattern=$(echo "$asset_pattern" | sed -E 's/#\{version\}/[0-9]+\.[0-9]+\.[0-9]+/g')
+                    asset_pattern=$(echo "$asset_pattern" | sed -E 's/#\{arch\}/(aarch64|arm64|x64|x86_64)/g')
+                    asset_pattern=$(echo "$asset_pattern" | sed -E 's/\./\\./g')
+                    echo "重新生成的完整模式: $asset_pattern" >&2
+                  fi
+                fi
               fi
 
               # 更新 cask
