@@ -319,10 +319,10 @@ jobs:
                else
                  # 使用正则表达式匹配
                  echo "🎯 使用正则表达式匹配: $asset_pattern" >&2
-                 # 对 asset_pattern 进行适当的转义处理
-                 escaped_pattern=$(echo "$asset_pattern" | sed 's/\\/\\\\/g')
+                 # 对 asset_pattern 进行适当的转义处理，避免 shell 转义问题
+                 escaped_pattern=$(printf '%s' "$asset_pattern" | sed 's/\\/\\\\/g')
                  download_url=$(echo "$latest_release" | \
-                   jq -r ".assets[] | select(.name | test(\"$escaped_pattern\")) | .browser_download_url" | head -1)
+                   jq -r --arg pattern "$escaped_pattern" '.assets[] | select(.name | test($pattern)) | .browser_download_url' | head -1)
 
                  # 如果正则匹配失败，尝试更简单的模式
                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
@@ -365,7 +365,7 @@ jobs:
                       echo "🎯 clash-nyanpasu 特殊处理..."
                       # 尝试匹配 Clash.Nyanpasu_版本_架构.dmg 格式（修复转义问题）
                       download_url=$(echo "$latest_release" | \
-                        jq -r '.assets[] | select(.name | test("Clash\\.Nyanpasu_.*\\.(dmg|zip|pkg)"; "i")) | \
+                        jq -r '.assets[] | select(.name | test("Clash\\.Nyanpasu_.*\\.(dmg|zip|pkg)")) | \
                           .browser_download_url' | \
                         head -1)
 
@@ -393,14 +393,14 @@ jobs:
                   if [[ -z "$download_url" || "$download_url" == "null" ]]; then
                     # 策略1：优先选择 Apple Silicon (aarch64/arm64) 版本（修复转义问题）
                      download_url=$(echo "$latest_release" | \
-                       jq -r '.assets[] | select(.name | test(".*_(aarch64|arm64)\\.(dmg|zip|pkg)"; "i")) | \
+                       jq -r '.assets[] | select(.name | test(".*_(aarch64|arm64)\\.(dmg|zip|pkg)")) | \
                          .browser_download_url' | \
                        head -1)
 
                      if [[ -z "$download_url" || "$download_url" == "null" ]]; then
                        # 策略2：尝试 x64 版本
                        download_url=$(echo "$latest_release" | \
-                         jq -r '.assets[] | select(.name | test(".*_(x64|x86_64)\\.(dmg|zip|pkg)"; "i")) | \
+                         jq -r '.assets[] | select(.name | test(".*_(x64|x86_64)\\.(dmg|zip|pkg)")) | \
                            .browser_download_url' | \
                          head -1)
                      fi
@@ -408,7 +408,7 @@ jobs:
                      if [[ -z "$download_url" || "$download_url" == "null" ]]; then
                        # 策略3：匹配包含 macOS 关键词的文件
                        download_url=$(echo "$latest_release" | \
-                         jq -r '.assets[] | select(.name | test(".*[Mm]ac[Oo][Ss].*\\.(dmg|zip|pkg)"; "i")) | \
+                         jq -r '.assets[] | select(.name | test(".*[Mm]ac[Oo][Ss].*\\.(dmg|zip|pkg)")) | \
                            .browser_download_url' | \
                          head -1)
                      fi
@@ -419,15 +419,15 @@ jobs:
                        app_name_pattern=$(echo "$base_name" | sed -E 's/-/_/g' | \
                          sed -E 's/([a-z])([A-Z])/\1[_-]?\2/g')
                        download_url=$(echo "$latest_release" | \
-                         jq -r ".assets[] | select(.name | test(\".*$app_name_pattern.*\\.(dmg|zip|pkg)\"; \"i\")) | \
-                           .browser_download_url" | \
+                         jq -r --arg pattern ".*$app_name_pattern.*\\.(dmg|zip|pkg)" '.assets[] | select(.name | test($pattern)) | \
+                           .browser_download_url' | \
                          head -1)
                      fi
 
                      if [[ -z "$download_url" || "$download_url" == "null" ]]; then
                        # 策略5：最后尝试匹配任何 macOS 兼容的文件
                        download_url=$(echo "$latest_release" | \
-                         jq -r '.assets[] | select(.name | test("\\.(dmg|zip|pkg)$"; "i")) | \
+                         jq -r '.assets[] | select(.name | test("\\.(dmg|zip|pkg)$")) | \
                            .browser_download_url' | \
                          head -1)
                      fi
@@ -505,8 +505,8 @@ jobs:
                 echo "🔄 尝试最终回退匹配..."
                 # 匹配任何包含应用名称的 macOS 文件
                 fallback_url=$(echo "$latest_release" | \
-                  jq -r ".assets[] | select(.name | test(\".*$base_name.*\\.(dmg|zip|pkg)\"; \"i\")) | \
-                    .browser_download_url" | \
+                  jq -r --arg pattern ".*$base_name.*\\.(dmg|zip|pkg)" '.assets[] | select(.name | test($pattern)) | \
+                    .browser_download_url' | \
                   head -1)
 
                 if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
