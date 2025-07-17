@@ -74,12 +74,99 @@ extract_app_info() {
     echo "| **$app_name** | $desc | \`$version\` | \`brew install gandli/proxy/$app_name\` | [🔗]($homepage) |"
 }
 
+# 从 Cask 文件中提取下载 URL 并下载应用程序
+# 参数: cask_file_path download_dir
+download_app_from_cask() {
+    local cask_file="$1"
+    local download_dir="$2"
+    local app_name=$(basename "$cask_file" .rb)
+    
+    print_info "正在处理 $app_name..." >&2
+    
+    # 创建临时目录用于下载
+    local temp_dir="$download_dir/$app_name"
+    mkdir -p "$temp_dir"
+    
+    # 提取版本号
+    local version=$(grep -E '^\s*version\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+    
+    if [[ -z "$version" ]]; then
+        print_warning "无法提取版本号: $app_name" >&2
+        return 1
+    fi
+    
+    # 检查是否有架构特定的配置
+    if grep -q "arch arm:" "$cask_file"; then
+        # 处理多架构应用
+        local arm_arch=$(grep "arch arm:" "$cask_file" | sed -E 's/.*arch arm: "([^"]+)".*/\1/')
+        local intel_arch=$(grep "arch arm:" "$cask_file" | sed -E 's/.*intel: "([^"]+)".*/\1/')
+        
+        # 检查是否有条件性 URL（如 mihomo-party）
+        if grep -q "on_.*:" "$cask_file"; then
+            # 处理条件性配置，优先使用 big_sur 或更新的配置
+            local url_line=$(grep -A 5 "on_big_sur" "$cask_file" | grep -E '^\s*url\s+"' | head -1)
+            if [[ -z "$url_line" ]]; then
+                # 如果没有 big_sur 配置，使用第一个找到的 URL
+                url_line=$(grep -E '^\s*url\s+"' "$cask_file" | head -1)
+            fi
+        else
+            # 标准多架构配置
+            local url_line=$(grep -E '^\s*url\s+"' "$cask_file" | head -1)
+        fi
+        
+        if [[ -n "$url_line" ]]; then
+            local base_url=$(echo "$url_line" | sed 's/.*"\([^"]*\)".*/\1/')
+            
+            # 替换变量
+            local arm_url=$(echo "$base_url" | sed "s/#{version}/$version/g" | sed "s/#{arch}/$arm_arch/g")
+            local intel_url=$(echo "$base_url" | sed "s/#{version}/$version/g" | sed "s/#{arch}/$intel_arch/g")
+            
+            # 下载 ARM 版本
+            if [[ -n "$arm_url" ]]; then
+                local arm_filename="${app_name}-${version}-arm64$(echo "$arm_url" | sed 's/.*\(\.[^.]*\)$/\1/')"
+                print_info "下载 ARM 版本: $arm_filename" >&2
+                if curl -L --fail --max-time 300 -o "$temp_dir/$arm_filename" "$arm_url" 2>/dev/null; then
+                    echo "$temp_dir/$arm_filename"
+                else
+                    print_warning "ARM 版本下载失败: $arm_url" >&2
+                fi
+            fi
+            
+            # 下载 Intel 版本
+            if [[ -n "$intel_url" ]]; then
+                local intel_filename="${app_name}-${version}-intel$(echo "$intel_url" | sed 's/.*\(\.[^.]*\)$/\1/')"
+                print_info "下载 Intel 版本: $intel_filename" >&2
+                if curl -L --fail --max-time 300 -o "$temp_dir/$intel_filename" "$intel_url" 2>/dev/null; then
+                    echo "$temp_dir/$intel_filename"
+                else
+                    print_warning "Intel 版本下载失败: $intel_url" >&2
+                fi
+            fi
+        fi
+    else
+        # 处理单一架构应用
+        local url=$(grep -E '^\s*url\s+"' "$cask_file" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
+        # 替换版本变量
+        url=$(echo "$url" | sed "s/#{version}/$version/g")
+        
+        if [[ -n "$url" ]]; then
+            local filename="${app_name}-${version}$(echo "$url" | sed 's/.*\(\.[^.]*\)$/\1/')"
+            print_info "下载通用版本: $filename" >&2
+            if curl -L --fail --max-time 300 -o "$temp_dir/$filename" "$url" 2>/dev/null; then
+                echo "$temp_dir/$filename"
+            else
+                print_warning "下载失败: $url" >&2
+            fi
+        fi
+    fi
+}
+
 # 生成发布说明
 generate_release_notes() {
     local version="$1"
     local release_notes_file="release-notes.md"
     
-    print_info "生成发布说明..."
+    print_info "生成发布说明..." >&2
     
     cat > "$release_notes_file" << EOF
 # 🍺 Homebrew Proxy Tap Release $version
@@ -131,6 +218,24 @@ cask "<cask_name>"
 brew bundle
 \`\`\`
 
+### 方法四：直接下载应用程序
+
+您也可以从本 Release 的 **Assets** 部分直接下载预编译的应用程序文件：
+
+1. 访问 [Release 页面](https://github.com/gandli/homebrew-proxy/releases/latest)
+2. 在 **Assets** 部分找到您需要的应用程序
+3. 下载对应您系统架构的版本（ARM64 或 Intel）
+4. 解压并安装到 Applications 文件夹
+
+\`\`\`bash
+# 示例：下载后手动安装
+# 1. 下载 .dmg 或 .pkg 文件
+# 2. 双击打开安装包
+# 3. 按照安装向导完成安装
+\`\`\`
+
+> **注意**: Assets 中包含的是从官方源下载的实际应用程序安装包，支持 ARM64 和 Intel 两种架构。这些文件与通过 Homebrew 安装的文件完全相同。
+
 ## 📈 更新内容
 
 - 📦 包含 $(ls Casks/*.rb | wc -l | tr -d ' ') 个精选代理应用程序
@@ -178,7 +283,8 @@ EOF
     
     echo '```' >> "$release_notes_file"
     
-    print_success "发布说明已生成: $release_notes_file"
+    print_success "发布说明已生成: $release_notes_file" >&2
+    # 返回文件名（不使用 echo 避免与其他输出混合）
     echo "$release_notes_file"
 }
 
@@ -233,13 +339,66 @@ create_github_release() {
         exit 1
     fi
     
-    # 创建 Release
-    gh release create "$version" \
-        --title "🍺 Homebrew Proxy Tap $version" \
-        --notes-file "$release_notes_file" \
-        --latest
+    # 创建临时下载目录
+    local download_dir="./temp_downloads"
+    mkdir -p "$download_dir"
     
-    print_success "GitHub Release $version 已创建"
+    print_info "开始从官方源下载应用程序文件..."
+    
+    # 下载所有应用程序文件
+    local app_files=()
+    local failed_downloads=()
+    
+    for cask_file in Casks/*.rb; do
+        if [ -f "$cask_file" ]; then
+            local app_name=$(basename "$cask_file" .rb)
+            print_info "处理 $app_name..."
+            
+            # 下载应用程序文件
+            local downloaded_files=$(download_app_from_cask "$cask_file" "$download_dir")
+            
+            if [[ -n "$downloaded_files" ]]; then
+                # 将下载的文件添加到数组中
+                while IFS= read -r file; do
+                    if [[ -f "$file" ]]; then
+                        app_files+=("$file")
+                        print_success "已下载: $(basename "$file")"
+                    fi
+                done <<< "$downloaded_files"
+            else
+                failed_downloads+=("$app_name")
+                print_warning "下载失败: $app_name"
+            fi
+        fi
+    done
+    
+    print_info "准备上传 ${#app_files[@]} 个应用程序文件作为 Release Assets..."
+    
+    if [ ${#failed_downloads[@]} -gt 0 ]; then
+        print_warning "以下应用下载失败: ${failed_downloads[*]}"
+        print_warning "将继续创建 Release，但这些应用不会包含在 Assets 中"
+    fi
+    
+    # 创建 Release 并上传应用程序文件
+    if [ ${#app_files[@]} -gt 0 ]; then
+        gh release create "$version" \
+            --title "🍺 Homebrew Proxy Tap $version" \
+            --notes-file "$release_notes_file" \
+            --latest \
+            "${app_files[@]}"
+    else
+        print_warning "没有成功下载任何应用程序文件，创建不包含 Assets 的 Release"
+        gh release create "$version" \
+            --title "🍺 Homebrew Proxy Tap $version" \
+            --notes-file "$release_notes_file" \
+            --latest
+    fi
+    
+    print_success "GitHub Release $version 已创建，包含 ${#app_files[@]} 个应用程序文件"
+    
+    # 清理下载的文件
+    print_info "清理临时下载文件..."
+    rm -rf "$download_dir"
 }
 
 # 清理临时文件
