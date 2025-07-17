@@ -1,0 +1,691 @@
+---
+name: Update Casks
+
+"on":
+  schedule:
+    - cron: 0 2 * * *
+  workflow_dispatch: {}
+
+# 防止并发执行，避免API速率限制冲突
+concurrency:
+  group: update-casks
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # 设置超时时间
+    steps:
+      - uses: actions/checkout@v4
+
+      # 缓存Ruby依赖
+      - name: Cache Ruby dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gem
+            vendor/bundle
+          key: ${{ runner.os }}-ruby-3.0-${{ hashFiles('**/Gemfile.lock', '**/gems.locked') }}
+          restore-keys: |
+            ${{ runner.os }}-ruby-3.0-
+            ${{ runner.os }}-ruby-
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.0'
+          bundler-cache: true  # 自动缓存bundler依赖
+
+      - name: Update all casks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # 从 cask 文件中提取 GitHub 仓库信息的函数
+          extract_repo_info() {
+            local cask_file="$1"
+
+            # 提取 homepage URL (GitHub 仓库)
+            local homepage
+            homepage=$(grep -E '^\s*homepage\s+"' "$cask_file" | sed -E 's/.*homepage\s+"([^"]+)".*/\1/')
+
+            # 如果 homepage 不是 GitHub，尝试从 URL 中提取
+            if [[ "$homepage" != *"github.com"* ]]; then
+              homepage=$(grep -E '^\s*url\s+"' "$cask_file" | \
+                sed -E 's/.*"https:\/\/github\.com\/([^\/]+\/[^\/]+)\/.*/https:\/\/github.com\/\1/' | head -1)
+            fi
+
+            # 提取 URL 模式来推断资源文件名
+            local url_line
+            url_line=$(grep -E '^\s*url\s+"' "$cask_file" | head -1)
+            local asset_pattern=""
+
+            # 通用的资源文件名推断逻辑
+            # 从 URL 中提取文件名模式，支持版本和架构变量替换
+            if [[ "$url_line" =~ url[[:space:]]+\"([^\"]+)\" ]]; then
+              local url_template
+              url_template="${BASH_REMATCH[1]}"
+
+              # 提取文件名部分（最后一个 / 之后的内容）
+              local filename
+              filename=$(echo "$url_template" | sed -E 's/.*\///')
+
+              echo "📋 提取的文件名模板: $filename" >&2
+
+              # 处理不同的文件名模式
+              if [[ "$filename" == *"#{"* ]]; then
+                # 包含变量的情况，替换为通用模式
+                asset_pattern="$filename"
+
+                # 替换版本变量
+                asset_pattern=$(echo "$asset_pattern" | sed -E 's/#\{version\}/[0-9]+\.[0-9]+\.[0-9]+/g')
+
+                # 处理架构变量
+                if [[ "$asset_pattern" == *"#{arch}"* ]]; then
+                  # 对于有架构变量的情况，创建一个更宽泛的模式
+                  asset_pattern=$(echo "$asset_pattern" | \
+                    sed -E 's/#\{arch\}/(aarch64|arm64|x64|x86_64)/g')
+                elif [[ "$asset_pattern" == *"_aarch64"* || "$asset_pattern" == *"_x64"* ]]; then
+                  # 处理固定架构的情况
+                  asset_pattern=$(echo "$asset_pattern" | \
+                    sed -E 's/_(aarch64|x64)/_(aarch64|arm64|x64|x86_64)/g')
+                fi
+
+                # 转义正则表达式特殊字符
+                asset_pattern=$(echo "$asset_pattern" | sed -E 's/\./\\./g')
+
+                # 调试输出：显示完整的模式生成过程
+                echo "🔧 原始文件名: $filename" >&2
+                echo "🔧 处理后的模式: $asset_pattern" >&2
+                echo "🔧 模式长度: ${#asset_pattern}" >&2
+              else
+                # 固定文件名的情况（如 Hiddify-MacOS.dmg）
+                asset_pattern=$(echo "$filename" | sed -E 's/\./\\./g')
+              fi
+
+              echo "🎯 生成的资产模式: $asset_pattern" >&2
+
+              # 检查模式长度，防止截断
+              if [[ ${#asset_pattern} -lt 10 ]]; then
+                echo "⚠️  资产模式似乎太短，可能被截断: '$asset_pattern'" >&2
+              fi
+            else
+              echo "⚠️  无法从以下内容提取 URL 模式: $url_line" >&2
+              asset_pattern=""
+            fi
+
+            # 确保完整输出，防止截断
+            if [[ -n "$homepage" && -n "$asset_pattern" ]]; then
+              printf "%s|%s\n" "$homepage" "$asset_pattern"
+            else
+              echo "$homepage|$asset_pattern"
+            fi
+          }
+
+          # 更新单个 cask 文件的函数
+          update_cask() {
+            local cask_file="$1"
+            local repo_url="$2"
+            local asset_pattern="$3"
+
+            echo "🔄 正在处理 $cask_file..."
+
+            if [[ "$repo_url" == *"github.com"* && -n "$asset_pattern" ]]; then
+              owner_repo=$(echo "$repo_url" | sed -e 's|https://github.com/||' -e 's|/$||')
+
+              # 获取最新版本信息（带重试机制和速率限制处理）
+              echo "正在获取 $owner_repo 的最新版本..."
+
+              # 智能API速率限制管理
+              check_and_handle_rate_limit() {
+                local min_remaining=${1:-20}  # 最小剩余请求数
+                local rate_limit_check
+                local remaining
+                local reset_time
+                local current_time
+                local wait_time
+
+                rate_limit_check=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/rate_limit")
+                remaining=$(echo "$rate_limit_check" | jq -r '.rate.remaining // 0')
+
+                echo "📊 API剩余请求数: $remaining" >&2
+
+                if [[ "$remaining" -lt "$min_remaining" ]]; then
+                  reset_time=$(echo "$rate_limit_check" | jq -r '.rate.reset // 0')
+                  current_time=$(date +%s)
+                  wait_time=$((reset_time - current_time + 60))
+
+                  if [[ $wait_time -gt 0 && $wait_time -lt 3600 ]]; then
+                    echo "⏳ API速率限制即将耗尽，智能等待 $wait_time 秒..." >&2
+                    sleep $wait_time
+                    return 0
+                  else
+                    echo "⚠️  API速率限制耗尽且重置时间异常，跳过当前操作" >&2
+                    return 1
+                  fi
+                fi
+
+                # 添加请求间隔，避免过于频繁的API调用
+                sleep 2
+                return 0
+              }
+
+              # 检查API速率限制
+              if ! check_and_handle_rate_limit 15; then
+                echo "❌ API速率限制处理失败，跳过 $cask_file" >&2
+                return
+              fi
+
+              # 首先检查仓库是否存在或已重定向
+              repo_check=$(curl -s -I -H "Authorization: token $GITHUB_TOKEN" \
+                "https://api.github.com/repos/$owner_repo")
+
+              if [[ "$repo_check" == *"301 Moved Permanently"* || "$repo_check" == *"302 Found"* ]]; then
+                echo "⚠️  仓库 $owner_repo 已被移动或重命名" >&2
+
+                # 尝试获取新的仓库地址
+                new_location=$(echo "$repo_check" | grep -i "location:" | sed 's/.*location: *//i' | tr -d '\r')
+                if [[ -n "$new_location" && "$new_location" == *"github.com"* ]]; then
+                  new_owner_repo=$(echo "$new_location" | \
+                    sed -E 's|.*github.com/([^/]+/[^/]+).*|\1|')
+                  echo "🔄 尝试新仓库: $new_owner_repo" >&2
+                  owner_repo="$new_owner_repo"
+                else
+                  echo "❌ 无法确定 $cask_file 的新仓库位置" >&2
+                  return
+                fi
+              fi
+
+              # 智能API请求重试机制
+              make_api_request() {
+                local url="$1"
+                local max_retries=5
+                local retry_count=0
+                local backoff_base=3
+                local response
+
+                while [[ $retry_count -lt $max_retries ]]; do
+                  # 在每次请求前检查速率限制
+                  if ! check_and_handle_rate_limit 10; then
+                    echo "❌ API速率限制检查失败，终止请求" >&2
+                    return 1
+                  fi
+
+                  echo "📡 发起API请求 (尝试 $((retry_count + 1))/$max_retries): $url" >&2
+                  response=$(curl -s -w "HTTP_CODE:%{http_code}" \
+                    -H "Authorization: token $GITHUB_TOKEN" "$url")
+
+                  local http_code
+                  http_code=$(echo "$response" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+                  local body
+                  body=$(echo "$response" | sed 's/HTTP_CODE:[0-9]*$//')
+
+                  # 根据HTTP状态码判断是否需要重试
+                  case "$http_code" in
+                    200)
+                      # 成功响应，检查内容是否有效
+                      if [[ -n "$body" && "$body" != *"rate limit"* && \
+                            "$body" != *"Not Found"* ]]; then
+                        echo "$body"
+                        return 0
+                      fi
+                      ;;
+                    403)
+                      # 可能是速率限制，等待更长时间
+                      echo "⚠️  收到403响应，可能触发速率限制" >&2
+                      if ! check_and_handle_rate_limit 5; then
+                        return 1
+                      fi
+                      ;;
+                    404)
+                      # 资源不存在，不需要重试
+                      echo "❌ 资源不存在 (404): $url" >&2
+                      return 1
+                      ;;
+                    301|302)
+                      # 重定向，尝试获取新位置
+                      echo "🔄 检测到重定向 ($http_code)" >&2
+                      ;;
+                    *)
+                      echo "⚠️  收到意外HTTP状态码: $http_code" >&2
+                      ;;
+                  esac
+
+                  retry_count=$((retry_count + 1))
+                  if [[ $retry_count -lt $max_retries ]]; then
+                    local wait_time
+                    wait_time=$((backoff_base ** retry_count))
+                    echo "⏳ 请求失败，指数退避等待 $wait_time 秒后重试..." >&2
+                    sleep $wait_time
+                  fi
+                done
+
+                echo "❌ API请求最终失败，已达到最大重试次数" >&2
+                return 1
+              }
+
+              # 使用智能请求机制获取最新版本
+              latest_release=$(make_api_request \
+                "https://api.github.com/repos/$owner_repo/releases/latest")
+
+              if [[ -z "$latest_release" || "$latest_release" == *"rate limit"* || \
+                    "$latest_release" == *"Not Found"* ]]; then
+                echo "❌ GitHub API 请求失败或达到速率限制 $cask_file (仓库: $owner_repo)" >&2
+                return
+              fi
+
+              latest_version=$(echo "$latest_release" | jq -r '.tag_name' | sed 's/^v//')
+
+              if [[ "$latest_version" == "null" || -z "$latest_version" ]]; then
+                echo "❌ 获取 $cask_file 最新版本失败 (仓库: $owner_repo)" >&2
+                echo "API 响应: $(echo "$latest_release" | jq -r '.message // "无消息"')" >&2
+
+                # 如果是 hiddify，尝试使用新的仓库名
+                if [[ "$owner_repo" == *"hiddify"* && "$owner_repo" == *"hiddify-next"* ]]; then
+                  echo "🔄 尝试 hiddify 的备用仓库名..." >&2
+                  owner_repo="hiddify/hiddify-app"
+                  latest_release=$(curl -s \
+                    "https://api.github.com/repos/$owner_repo/releases/latest")
+                  latest_version=$(echo "$latest_release" | jq -r '.tag_name' | sed 's/^v//')
+
+                  if [[ "$latest_version" != "null" && -n "$latest_version" ]]; then
+                    echo "✅ 在备用仓库中找到版本: $owner_repo" >&2
+                  else
+                    echo "❌ 备用仓库也失败了" >&2
+                    return
+                  fi
+                else
+                  return
+                fi
+              fi
+
+              echo "找到最新版本: $latest_version"
+
+              # 获取匹配的资源文件
+               echo "搜索匹配模式的资产: $asset_pattern"
+
+               # 列出所有可用的资源文件用于调试
+               echo "可用资产:"
+               echo "$latest_release" | jq -r '.assets[].name' | sed 's/^/  - /'
+
+               # 通用的资源文件匹配逻辑
+               # 首先尝试完全匹配模式（修复 jq 转义问题）
+               # 对于固定文件名（如 Hiddify-MacOS.dmg），使用精确匹配
+               if [[ "$asset_pattern" =~ ^[A-Za-z0-9._-]+\\\.[a-z]+$ ]]; then
+                 # 固定文件名，使用精确匹配
+                 fixed_name=${asset_pattern//\\./.}
+                 download_url=$(echo "$latest_release" | \
+                   jq -r ".assets[] | select(.name == \"$fixed_name\") | .browser_download_url" | head -1)
+                 echo "🎯 对固定文件名使用精确匹配: $fixed_name"
+               else
+                 # 使用正则表达式匹配
+                 echo "🎯 使用正则表达式匹配: $asset_pattern" >&2
+                 download_url=$(echo "$latest_release" | \
+                   jq -r ".assets[] | select(.name | test(\"$asset_pattern\")) | .browser_download_url" | head -1)
+
+                 # 如果正则匹配失败，尝试更简单的模式
+                 if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                   echo "🔄 正则匹配失败，尝试简化模式..." >&2
+                   # 移除复杂的正则表达式，使用更简单的匹配
+                   simple_pattern=$(echo "$asset_pattern" | sed -E 's/\\\././g' | \
+                     sed -E 's/\[0-9\]\+\\\.[0-9\]\+\\\.[0-9\]\+/[0-9.]*/g' | \
+                     sed -E 's/\([^)]*\)/*/g')
+                   echo "🎯 简化后的模式: $simple_pattern" >&2
+                   download_url=$(echo "$latest_release" | \
+                     jq -r ".assets[] | select(.name | contains(\"$simple_pattern\")) | .browser_download_url" | \
+                     head -1)
+                 fi
+               fi
+
+               # 如果没有找到匹配的资源，尝试智能匹配
+                if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                  echo "未找到精确匹配，尝试智能匹配..."
+
+                  # 从原始文件名中提取基本信息
+                  local base_name
+                  base_name=$(basename "$cask_file" .rb)
+                  local file_ext=""
+
+                  # 从 asset_pattern 中推断文件扩展名
+                  if [[ "$asset_pattern" == *".dmg"* ]]; then
+                    file_ext="dmg"
+                  elif [[ "$asset_pattern" == *".zip"* ]]; then
+                    file_ext="zip"
+                  elif [[ "$asset_pattern" == *".pkg"* ]]; then
+                    file_ext="pkg"
+                  else
+                    file_ext="(dmg|zip|pkg)"
+                  fi
+
+                  echo "尝试智能匹配 base_name: $base_name, file_ext: $file_ext"
+
+                  # 特殊处理：clash-nyanpasu 的文件名模式
+                    if [[ "$base_name" == "clash-nyanpasu" ]]; then
+                      echo "🎯 clash-nyanpasu 特殊处理..."
+                      # 尝试匹配 Clash.Nyanpasu_版本_架构.dmg 格式（修复转义问题）
+                      download_url=$(echo "$latest_release" | \
+                        jq -r '.assets[] | select(.name | test("Clash[.]Nyanpasu_.*[.](dmg|zip|pkg)"; "i")) | \
+                          .browser_download_url' | \
+                        head -1)
+
+                      if [[ -n "$download_url" && "$download_url" != "null" ]]; then
+                        echo "✅ 找到 clash-nyanpasu 资产: $(echo "$latest_release" | \
+                          jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | \
+                            .name")"
+                      fi
+                    fi
+
+                    # 特殊处理：hiddify 的文件名模式
+                    if [[ "$base_name" == "hiddify" && (-z "$download_url" || "$download_url" == "null") ]]; then
+                      echo "🎯 hiddify 特殊处理..."
+                      # 直接匹配 Hiddify-MacOS.dmg
+                      download_url=$(echo "$latest_release" | \
+                        jq -r '.assets[] | select(.name == "Hiddify-MacOS.dmg") | .browser_download_url' | \
+                        head -1)
+
+                      if [[ -n "$download_url" && "$download_url" != "null" ]]; then
+                        echo "✅ 找到 hiddify 资产: Hiddify-MacOS.dmg"
+                      fi
+                    fi
+
+                  # 如果特殊处理没有找到，继续通用策略
+                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                    # 策略1：优先选择 Apple Silicon (aarch64/arm64) 版本（修复转义问题）
+                     download_url=$(echo "$latest_release" | \
+                       jq -r '.assets[] | select(.name | test(".*_(aarch64|arm64)[.](dmg|zip|pkg)"; "i")) | \
+                         .browser_download_url' | \
+                       head -1)
+
+                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                       # 策略2：尝试 x64 版本
+                       download_url=$(echo "$latest_release" | \
+                         jq -r '.assets[] | select(.name | test(".*_(x64|x86_64)[.](dmg|zip|pkg)"; "i")) | \
+                           .browser_download_url' | \
+                         head -1)
+                     fi
+
+                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                       # 策略3：匹配包含 macOS 关键词的文件
+                       download_url=$(echo "$latest_release" | \
+                         jq -r '.assets[] | select(.name | test(".*[Mm]ac[Oo][Ss].*[.](dmg|zip|pkg)"; "i")) | \
+                           .browser_download_url' | \
+                         head -1)
+                     fi
+
+                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                       # 策略4：匹配包含应用名称的文件
+                       local app_name_pattern
+                       app_name_pattern=$(echo "$base_name" | sed -E 's/-/_/g' | \
+                         sed -E 's/([a-z])([A-Z])/\1[_-]?\2/g')
+                       download_url=$(echo "$latest_release" | \
+                         jq -r ".assets[] | select(.name | test(\".*$app_name_pattern.*[.](dmg|zip|pkg)\"; \"i\")) | \
+                           .browser_download_url" | \
+                         head -1)
+                     fi
+
+                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                       # 策略5：最后尝试匹配任何 macOS 兼容的文件
+                       download_url=$(echo "$latest_release" | \
+                         jq -r '.assets[] | select(.name | test("[.](dmg|zip|pkg)$"; "i")) | \
+                           .browser_download_url' | \
+                         head -1)
+                     fi
+
+                    if [[ -n "$download_url" && "$download_url" != "null" ]]; then
+                      echo "✅ 使用智能匹配找到资产: $(echo "$latest_release" | \
+                        jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")"
+                    fi
+                  fi
+                fi
+
+              if [[ -n "$download_url" && "$download_url" != "null" ]]; then
+                local matched_asset
+                 matched_asset=$(echo "$latest_release" | \
+                   jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")
+                echo "✅ 找到匹配的资产: $matched_asset"
+                echo "📥 下载链接: $download_url"
+
+                # 获取当前版本进行比较
+                current_version=$(grep -E '^\s*version\s+"' "$cask_file" | sed -E 's/.*version\s+"([^"]+)".*/\1/')
+
+                if [[ "$current_version" == "$latest_version" ]]; then
+                  echo "ℹ️  $cask_file 已是最新版本 (版本 $current_version)"
+                else
+                  echo "📥 正在下载并计算 SHA256: $download_url..."
+
+                  # 使用更健壮的下载和 SHA256 计算方法
+                  sha256=$(curl -sL --fail "$download_url" | \
+                    shasum -a 256 | awk '{print $1}')
+
+                  if [[ -n "$sha256" && ${#sha256} -eq 64 ]]; then
+                    echo "🔒 计算的 SHA256: $sha256"
+
+                    # 检查是否为多架构 cask（包含 arch 变量）
+                    if grep -q 'arch arm:' "$cask_file"; then
+                      echo "🏗️  检测到多架构 cask，正在适当更新..."
+
+                      # 对于多架构 cask，需要更新对应架构的 SHA256
+                      if [[ "$download_url" == *"aarch64"* || "$download_url" == *"arm64"* ]]; then
+                        # 更新 ARM 架构的 SHA256
+                        sed -i "s/version \".*\"/version \"$latest_version\"/" "$cask_file"
+                        sed -i "s/sha256 arm:\s*\"[^\"]*\"/sha256 arm:   \"$sha256\"/" "$cask_file"
+                        echo "✅ 已更新 $cask_file 的 ARM SHA256 到版本 $latest_version"
+                      elif [[ "$download_url" == *"x64"* || "$download_url" == *"x86_64"* ]]; then
+                        # 更新 Intel 架构的 SHA256
+                        sed -i "s/version \".*\"/version \"$latest_version\"/" "$cask_file"
+                        sed -i \
+                          "s/sha256.*intel:\s*\"[^\"]*\"/sha256 arm:   \"$sha256\",\n         intel: \"$sha256\"/" \
+                          "$cask_file"
+                        echo "✅ 已更新 $cask_file 的 Intel SHA256 到版本 $latest_version"
+                      fi
+                    else
+                      # 单架构 cask 的标准更新
+                      sed -i "s/version \".*\"/version \"$latest_version\"/" "$cask_file"
+                      sed -i "s/sha256 \".*\"/sha256 \"$sha256\"/" "$cask_file"
+                      echo "✅ 已更新 $cask_file 到版本 $latest_version"
+                    fi
+
+                    echo "📝 对 $cask_file 的更改:"
+                    echo "   版本: $current_version → $latest_version"
+                    echo "   资产: $matched_asset"
+                  else
+                    echo "❌ 计算 $cask_file 的有效 SHA256 失败 (得到: $sha256)"
+                  fi
+                fi
+              else
+                echo "❌ 未找到 $cask_file 的匹配资产"
+                echo "   使用的模式: $asset_pattern"
+                echo "   仓库: $repo_url"
+                echo "   基础名称: $base_name"
+                echo "   可用资产:"
+                echo "$latest_release" | jq -r '.assets[].name' | sed 's/^/     - /'
+
+                # 尝试最后的通用匹配策略
+                echo "🔄 尝试最终回退匹配..."
+                # 匹配任何包含应用名称的 macOS 文件
+                fallback_url=$(echo "$latest_release" | \
+                  jq -r ".assets[] | select(.name | test(\".*$base_name.*[.](dmg|zip|pkg)\"; \"i\")) | \
+                    .browser_download_url" | \
+                  head -1)
+
+                if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
+                  download_url="$fallback_url"
+                  matched_asset=$(echo "$latest_release" | \
+                    jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")
+                  echo "✅ 找到回退匹配: $matched_asset"
+                  echo "📥 回退下载链接: $download_url"
+
+                  # 重新执行下载和更新逻辑
+                  current_version=$(grep -E '^\s*version\s+"' "$cask_file" | \
+                    sed -E 's/.*version\s+"([^"]+)".*/\1/')
+
+                  if [[ "$current_version" != "$latest_version" ]]; then
+                    echo "📥 正在下载并计算回退链接的 SHA256..."
+                    sha256=$(curl -sL --fail "$download_url" | \
+                      shasum -a 256 | awk '{print $1}')
+
+                    if [[ -n "$sha256" && ${#sha256} -eq 64 ]]; then
+                      echo "🔒 计算的 SHA256: $sha256"
+                      sed -i "s/version \".*\"/version \"$latest_version\"/" "$cask_file"
+                      sed -i "s/sha256 \".*\"/sha256 \"$sha256\"/" "$cask_file"
+                      echo "✅ 使用回退方式已更新 $cask_file 到版本 $latest_version"
+                      echo "📝 对 $cask_file 的更改:"
+                      echo "   版本: $current_version → $latest_version"
+                      echo "   资产: $matched_asset"
+                    else
+                      echo "❌ 计算回退链接的有效 SHA256 失败 (得到: $sha256)"
+                    fi
+                  fi
+                else
+                  echo "❌ 也未找到回退匹配"
+                fi
+              fi
+            else
+              echo "⚠️  跳过 $cask_file (不是 GitHub 仓库或缺少资产模式)"
+            fi
+            echo "---"
+          }
+
+          # 🔍 发现并处理所有 cask 文件
+          echo "🔍 在 Casks/ 目录中发现 cask 文件..."
+
+          # 创建临时目录用于并行处理
+          temp_dir=$(mktemp -d)
+          trap "rm -rf $temp_dir" EXIT
+
+          # 收集所有需要处理的cask文件
+          cask_files=()
+          for cask_file in Casks/*.rb; do
+            if [[ -f "$cask_file" ]]; then
+              cask_files+=("$cask_file")
+            fi
+          done
+
+          echo "📦 发现 ${#cask_files[@]} 个 cask 文件"
+
+          # 批量处理函数
+          process_cask_batch() {
+            local batch_files=("$@")
+            local batch_size=${#batch_files[@]}
+
+            echo "🔄 开始处理批次，包含 $batch_size 个文件"
+
+            for cask_file in "${batch_files[@]}"; do
+              echo "📦 处理 cask 文件: $cask_file"
+
+              # 提取仓库信息和资源模式
+              repo_info=$(extract_repo_info "$cask_file")
+              repo_url=$(echo "$repo_info" | cut -d'|' -f1)
+              asset_pattern=$(echo "$repo_info" | cut -d'|' -f2)
+
+              echo "🔗 仓库: $repo_url"
+              echo "🎯 资产模式: $asset_pattern"
+
+              # 调试：检查提取的信息
+              if [[ -z "$repo_url" || -z "$asset_pattern" ]]; then
+                echo "⚠️  警告: 仓库 URL 或资产模式为空" >&2
+                echo "   repo_info: '$repo_info'" >&2
+                echo "   repo_url: '$repo_url'" >&2
+                echo "   asset_pattern: '$asset_pattern'" >&2
+              fi
+
+              # 检查资产模式是否被截断
+              if [[ ${#asset_pattern} -lt 10 ]]; then
+                echo "⚠️  警告: 资产模式似乎太短 (${#asset_pattern} 字符): '$asset_pattern'" >&2
+                echo "🔍 重新提取资产模式并显示详细输出..." >&2
+
+                # 重新提取并显示详细过程
+                url_template=$(grep -E '^\s*url\s+' "$cask_file" | head -1)
+                echo "找到 URL 模板: $url_template" >&2
+
+                filename_template=$(echo "$url_template" | sed -E 's/.*\/([^"]+)".*/\1/' | sed -E 's/#{[^}]+}/*/g')
+                echo "文件名模板: $filename_template" >&2
+
+                # 重新生成资产模式
+                asset_pattern=$(echo "$filename_template" | \
+                  sed -E 's/\./\\./g' | sed -E 's/\*/[^/]+/g')
+                echo "重新生成的资产模式: $asset_pattern" >&2
+              fi
+
+              # 更新 cask
+              update_cask "$cask_file" "$repo_url" "$asset_pattern"
+
+              # 在处理间隔中添加短暂延迟，避免API过载
+              sleep 1
+            done
+          }
+
+          # 分批处理，每批3个文件，避免API速率限制
+          batch_size=3
+          total_files=${#cask_files[@]}
+
+          for ((i=0; i<total_files; i+=batch_size)); do
+            batch=("${cask_files[@]:i:batch_size}")
+            batch_num=$((i/batch_size + 1))
+            total_batches=$(((total_files + batch_size - 1) / batch_size))
+
+            echo "📊 处理批次 $batch_num/$total_batches (文件 $((i+1))-$((i+${#batch[@]}))/$total_files)"
+
+            process_cask_batch "${batch[@]}"
+
+            # 批次间等待，确保API速率限制不被触发
+            if [[ $i -lt $((total_files - batch_size)) ]]; then
+              echo "⏳ 批次间等待 10 秒，避免API速率限制..."
+              sleep 10
+            fi
+          done
+
+          echo "🎉 所有 cask 文件已处理完成!"
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add Casks/
+
+          # 检查是否有更改需要提交
+          if ! git diff --quiet || ! git diff --staged --quiet; then
+            # 获取已更改的 cask 文件列表
+            changed_casks=$(git diff --cached --name-only | grep 'Casks/.*\.rb$' | \
+              sed 's|Casks/||' | sed 's|\.rb$||' | tr '\n' ' ' | sed 's/ $//')
+
+            if [[ -n "$changed_casks" ]]; then
+              # 为每个更改的 cask 获取新版本信息
+              commit_details=""
+              for cask in $changed_casks; do
+                cask_file="Casks/${cask}.rb"
+                if [[ -f "$cask_file" ]]; then
+                  new_version=$(grep -E '^\s*version\s+' "$cask_file" | head -1 | \
+                    sed -E 's/.*version\s+"([^"]+)".*/\1/')
+                  if [[ -n "$new_version" ]]; then
+                    commit_details="${commit_details}\n- ${cask}: 更新到 v${new_version}"
+                  else
+                    commit_details="${commit_details}\n- ${cask}: 已更新"
+                  fi
+                fi
+              done
+
+              # 构建详细的提交信息
+              commit_message="🚀 更新 Homebrew Casks
+
+              本次更新包含以下应用:${commit_details}
+
+              📅 更新时间: $(date '+%Y-%m-%d %H:%M:%S')
+              🤖 自动更新 by GitHub Actions"
+
+              git commit -m "$commit_message"
+              echo "✅ 已提交更改，包含以下应用更新: $changed_casks"
+            else
+              git commit -m "🔧 更新 Homebrew Casks 配置文件"
+              echo "✅ 已提交配置文件更改"
+            fi
+
+            # 只在有提交时才推送
+            echo "📤 正在推送更改到远程仓库..."
+            git pull --rebase origin main || {
+              echo "⚠️  拉取远程更改失败，尝试强制推送..."
+              git push --force-with-lease
+            } && git push
+            echo "✅ 更改已成功推送到远程仓库"
+          else
+            echo "ℹ️  没有检测到需要提交的更改，跳过推送操作"
+          fi
