@@ -40,6 +40,91 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # 智能资源文件匹配函数
+          find_matching_asset() {
+            local latest_release="$1"
+            local base_name="$2"
+            local file_ext="$3"
+            
+            echo "🔍 开始智能多轮回退匹配策略..." >&2
+            
+            # 提取应用名称（去除连字符，转换为点分隔）
+            local app_name
+            app_name=$(echo "$base_name" | sed -E 's/-([a-z])/\U\1/g' | sed -E 's/^([a-z])/\U\1/')
+            
+            # 获取当前架构
+            local current_arch="aarch64"  # GitHub Actions 默认为 x64，但我们优先匹配 Apple Silicon
+            
+            # 构建多种搜索策略
+            local strategies=(
+              # 策略1：基于应用名称的精确匹配
+              "cask_original:$base_name"
+              # 策略2：基于应用名称的点分隔匹配
+              "cask_dots:$(echo "$base_name" | sed 's/-/\./g')"
+              # 策略3：部分名称匹配（去除常见后缀）
+              "partial_dots:$(echo "$base_name" | sed -E 's/-(rev|party|meta|pro|plus)$//' | sed 's/-/\./g')"
+              # 策略4：应用名称匹配
+              "app_name:$app_name"
+              # 策略5：架构特定匹配
+              "arch_specific:$current_arch"
+            )
+            
+            # 多轮匹配执行
+            for strategy in "${strategies[@]}"; do
+              local strategy_type="${strategy%%:*}"
+              local search_term="${strategy#*:}"
+              
+              echo "🎯 尝试策略: $strategy_type -> $search_term" >&2
+              
+              local download_url=""
+              
+              case "$strategy_type" in
+                "cask_original")
+                  # 优先匹配当前架构
+                  download_url=$(echo "$latest_release" | \
+                    jq -r ".assets[] | select(.name | test(\".*$search_term.*_$current_arch\\.$file_ext\")) | .browser_download_url" | head -1)
+                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                    # 通用匹配
+                    download_url=$(echo "$latest_release" | \
+                      jq -r ".assets[] | select(.name | test(\".*$search_term.*\\.$file_ext\")) | .browser_download_url" | head -1)
+                  fi
+                  ;;
+                "cask_dots"|"partial_dots")
+                  # 优先匹配当前架构
+                  download_url=$(echo "$latest_release" | \
+                    jq -r ".assets[] | select(.name | test(\".*$search_term.*_$current_arch\\.$file_ext\")) | .browser_download_url" | head -1)
+                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
+                    # 通用匹配
+                    download_url=$(echo "$latest_release" | \
+                      jq -r ".assets[] | select(.name | test(\".*$search_term.*\\.$file_ext\")) | .browser_download_url" | head -1)
+                  fi
+                  ;;
+                "app_name")
+                  # 应用名称匹配
+                  download_url=$(echo "$latest_release" | \
+                    jq -r ".assets[] | select(.name | test(\".*$search_term.*\\.$file_ext\")) | .browser_download_url" | head -1)
+                  ;;
+                "arch_specific")
+                  # 架构特定匹配
+                  download_url=$(echo "$latest_release" | \
+                    jq -r ".assets[] | select(.name | test(\".*_$search_term\\.$file_ext\")) | .browser_download_url" | head -1)
+                  ;;
+              esac
+              
+              if [[ -n "$download_url" && "$download_url" != "null" ]]; then
+                local matched_file
+                matched_file=$(echo "$latest_release" | \
+                  jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")
+                echo "✅ 策略 $strategy_type 成功匹配: $matched_file" >&2
+                echo "$download_url"
+                return 0
+              fi
+            done
+            
+            echo "❌ 所有智能匹配策略都失败了" >&2
+            return 1
+          }
+
           # 从 cask 文件中提取 GitHub 仓库信息的函数
           extract_repo_info() {
             local cask_file="$1"
@@ -340,7 +425,7 @@ jobs:
 
                # 如果没有找到匹配的资源，尝试智能匹配
                 if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                  echo "未找到精确匹配，尝试智能匹配..."
+                  echo "未找到精确匹配，启动智能多轮回退匹配策略..."
 
                   # 从原始文件名中提取基本信息
                   local base_name
@@ -358,84 +443,16 @@ jobs:
                     file_ext="(dmg|zip|pkg)"
                   fi
 
-                  echo "尝试智能匹配 base_name: $base_name, file_ext: $file_ext"
+                  echo "启动智能匹配 base_name: $base_name, file_ext: $file_ext"
 
-                  # 特殊处理：clash-nyanpasu 的文件名模式
-                    if [[ "$base_name" == "clash-nyanpasu" ]]; then
-                      echo "🎯 clash-nyanpasu 特殊处理..."
-                      # 尝试匹配 Clash.Nyanpasu_版本_架构.dmg 格式（修复转义问题）
-                      download_url=$(echo "$latest_release" | \
-                        jq -r '.assets[] | select(.name | test("Clash\\.Nyanpasu_.*\\.(dmg|zip|pkg)")) | \
-                          .browser_download_url' | \
-                        head -1)
+                  # 调用智能匹配函数
+                  download_url=$(find_matching_asset "$latest_release" "$base_name" "$file_ext")
 
-                      if [[ -n "$download_url" && "$download_url" != "null" ]]; then
-                        echo "✅ 找到 clash-nyanpasu 资产: $(echo "$latest_release" | \
-                          jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | \
-                            .name")"
-                      fi
-                    fi
-
-                    # 特殊处理：hiddify 的文件名模式
-                    if [[ "$base_name" == "hiddify" && (-z "$download_url" || "$download_url" == "null") ]]; then
-                      echo "🎯 hiddify 特殊处理..."
-                      # 直接匹配 Hiddify-MacOS.dmg
-                      download_url=$(echo "$latest_release" | \
-                        jq -r '.assets[] | select(.name == "Hiddify-MacOS.dmg") | .browser_download_url' | \
-                        head -1)
-
-                      if [[ -n "$download_url" && "$download_url" != "null" ]]; then
-                        echo "✅ 找到 hiddify 资产: Hiddify-MacOS.dmg"
-                      fi
-                    fi
-
-                  # 如果特殊处理没有找到，继续通用策略
-                  if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                    # 策略1：优先选择 Apple Silicon (aarch64/arm64) 版本（修复转义问题）
-                     download_url=$(echo "$latest_release" | \
-                       jq -r '.assets[] | select(.name | test(".*_(aarch64|arm64)\\.(dmg|zip|pkg)")) | \
-                         .browser_download_url' | \
-                       head -1)
-
-                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                       # 策略2：尝试 x64 版本
-                       download_url=$(echo "$latest_release" | \
-                         jq -r '.assets[] | select(.name | test(".*_(x64|x86_64)\\.(dmg|zip|pkg)")) | \
-                           .browser_download_url' | \
-                         head -1)
-                     fi
-
-                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                       # 策略3：匹配包含 macOS 关键词的文件
-                       download_url=$(echo "$latest_release" | \
-                         jq -r '.assets[] | select(.name | test(".*[Mm]ac[Oo][Ss].*\\.(dmg|zip|pkg)")) | \
-                           .browser_download_url' | \
-                         head -1)
-                     fi
-
-                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                       # 策略4：匹配包含应用名称的文件
-                       local app_name_pattern
-                       app_name_pattern=$(echo "$base_name" | sed -E 's/-/_/g' | \
-                         sed -E 's/([a-z])([A-Z])/\1[_-]?\2/g')
-                       download_url=$(echo "$latest_release" | \
-                         jq -r --arg pattern ".*$app_name_pattern.*\\.(dmg|zip|pkg)" '.assets[] | select(.name | test($pattern)) | \
-                           .browser_download_url' | \
-                         head -1)
-                     fi
-
-                     if [[ -z "$download_url" || "$download_url" == "null" ]]; then
-                       # 策略5：最后尝试匹配任何 macOS 兼容的文件
-                       download_url=$(echo "$latest_release" | \
-                         jq -r '.assets[] | select(.name | test("\\.(dmg|zip|pkg)$")) | \
-                           .browser_download_url' | \
-                         head -1)
-                     fi
-
-                    if [[ -n "$download_url" && "$download_url" != "null" ]]; then
-                      echo "✅ 使用智能匹配找到资产: $(echo "$latest_release" | \
-                        jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")"
-                    fi
+                  if [[ -n "$download_url" && "$download_url" != "null" ]]; then
+                    local matched_asset
+                    matched_asset=$(echo "$latest_release" | \
+                      jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")
+                    echo "🎉 智能匹配成功找到资产: $matched_asset"
                   fi
                 fi
 
@@ -501,107 +518,25 @@ jobs:
                 echo "   可用资产:"
                 echo "$latest_release" | jq -r '.assets[].name' | sed 's/^/     - /'
 
-                # 智能多轮回退匹配策略
-                echo "🔄 启动智能回退匹配..."
+                # 使用智能匹配函数进行回退匹配
+                local base_name_fallback
+                base_name_fallback=$(basename "$cask_file" .rb)
+                local file_ext_fallback="(dmg|zip|pkg)"
+                fallback_url=$(find_matching_asset "$latest_release" "$base_name_fallback" "$file_ext_fallback")
                 
-                # 第一步：提取应用名称和架构信息
-                app_line=$(grep -E '^\s*app\s+' "$cask_file" | head -1)
-                app_name=""
-                if [[ "$app_line" =~ [[:space:]]*app[[:space:]]+\"([^\"]+)\"\.app ]]; then
-                  app_name="${BASH_REMATCH[1]}"
-                  echo "📱 提取应用名称: '$app_name'" >&2
-                fi
-                
-                # 获取当前架构
-                current_arch="aarch64"  # 默认为 arm64
-                if [[ "$(uname -m)" == "x86_64" ]]; then
-                  current_arch="x64"
-                fi
-                echo "🏗️ 当前架构: $current_arch" >&2
-                
-                # 第二步：构建智能搜索模式
-                declare -a search_strategies
-                
-                # 策略1：基于应用名称的精确匹配
-                if [[ -n "$app_name" ]]; then
-                  app_base=$(echo "$app_name" | tr ' ' '.' | tr '[:upper:]' '[:lower:]')
-                  search_strategies+=(
-                    "exact_app:$app_base"
-                    "exact_app_arch:$app_base.*$current_arch"
-                  )
-                fi
-                
-                # 策略2：基于 cask 名称的变体匹配
-                cask_base=$(echo "$base_name" | tr '[:upper:]' '[:lower:]')
-                search_strategies+=(
-                  "cask_original:$cask_base"
-                  "cask_dots:$(echo "$cask_base" | tr '-' '.')"
-                  "cask_underscores:$(echo "$cask_base" | tr '-' '_')"
-                  "cask_arch:$cask_base.*$current_arch"
-                  "cask_dots_arch:$(echo "$cask_base" | tr '-' '.').*$current_arch"
-                )
-                
-                # 策略3：部分匹配（去除常见后缀）
-                if [[ "$cask_base" =~ (.+)-(rev|nightly|beta|alpha|dev)$ ]]; then
-                  partial_name="${BASH_REMATCH[1]}"
-                  search_strategies+=(
-                    "partial:$partial_name"
-                    "partial_dots:$(echo "$partial_name" | tr '-' '.')"
-                    "partial_arch:$partial_name.*$current_arch"
-                  )
-                fi
-                
-                # 第三步：多轮匹配执行
-                fallback_url=""
-                matched_strategy=""
-                
-                for strategy in "${search_strategies[@]}"; do
-                  strategy_name="${strategy%%:*}"
-                  pattern="${strategy#*:}"
-                  
-                  echo "🎯 尝试策略 [$strategy_name]: '$pattern'" >&2
-                  
-                  # 优先匹配当前架构的文件
-                  fallback_url=$(echo "$latest_release" | \
-                    jq -r --arg pattern "$pattern" --arg arch "$current_arch" '
-                      .assets[] | 
-                      select(.name | ascii_downcase | test($pattern; "i")) |
-                      select(.name | endswith(".dmg")) |
-                      select(.name | contains($arch)) |
-                      .browser_download_url
-                    ' | head -1)
-                  
-                  # 如果没找到架构特定的，尝试通用匹配
-                  if [[ -z "$fallback_url" || "$fallback_url" == "null" ]]; then
-                    fallback_url=$(echo "$latest_release" | \
-                      jq -r --arg pattern "$pattern" '
-                        .assets[] | 
-                        select(.name | ascii_downcase | test($pattern; "i")) |
-                        select(.name | endswith(".dmg")) |
-                        .browser_download_url
-                      ' | head -1)
-                  fi
-                  
-                  if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
-                    matched_strategy="$strategy_name"
-                    echo "✅ 匹配成功，策略: [$strategy_name], 模式: '$pattern'" >&2
-                    break
-                  fi
-                done
-
                 if [[ -n "$fallback_url" && "$fallback_url" != "null" ]]; then
                   download_url="$fallback_url"
                   matched_asset=$(echo "$latest_release" | \
                     jq -r ".assets[] | select(.browser_download_url == \"$download_url\") | .name")
-                  echo "✅ 找到回退匹配: $matched_asset"
-                  echo "📥 回退下载链接: $download_url"
+                  echo "✅ 找到智能匹配: $matched_asset"
+                  echo "📥 智能匹配下载链接: $download_url"
 
                   # 重新执行下载和更新逻辑
                   current_version=$(grep -E '^\s*version\s+"' "$cask_file" | \
                     sed -E 's/.*version\s+"([^"]+)".*/\1/')
 
                   if [[ "$current_version" != "$latest_version" ]]; then
-                    echo "📥 正在下载并计算回退链接的 SHA256..."
+                    echo "📥 正在下载并计算智能匹配链接的 SHA256..."
                     sha256=$(curl -sL --fail "$download_url" | \
                       shasum -a 256 | awk '{print $1}')
 
@@ -609,16 +544,16 @@ jobs:
                       echo "🔒 计算的 SHA256: $sha256"
                       sed -i "s/version \".*\"/version \"$latest_version\"/" "$cask_file"
                       sed -i "s/sha256 \".*\"/sha256 \"$sha256\"/" "$cask_file"
-                      echo "✅ 使用回退方式已更新 $cask_file 到版本 $latest_version"
+                      echo "✅ 使用智能匹配已更新 $cask_file 到版本 $latest_version"
                       echo "📝 对 $cask_file 的更改:"
                       echo "   版本: $current_version → $latest_version"
                       echo "   资产: $matched_asset"
                     else
-                      echo "❌ 计算回退链接的有效 SHA256 失败 (得到: $sha256)"
+                      echo "❌ 计算智能匹配链接的有效 SHA256 失败 (得到: $sha256)"
                     fi
                   fi
                 else
-                  echo "❌ 也未找到回退匹配"
+                  echo "❌ 智能匹配也未找到合适的资产"
                 fi
               fi
             else
