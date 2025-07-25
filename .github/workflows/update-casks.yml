@@ -233,32 +233,46 @@ jobs:
               return
             fi
             
-            # 提取 livecheck 策略
+            # 检测 livecheck 策略类型（支持多种格式）
             local livecheck_strategy
-            livecheck_strategy=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'strategy\s+:' | \
-              sed -E 's/.*strategy\s+:([a-zA-Z_]+).*/\1/' | head -1)
+            livecheck_strategy=$(grep -A 15 'livecheck do' "$cask_file" | \
+              grep -E '(strategy\s+:|strategy\s*\(|:\s*sparkle|:\s*page_match)' | \
+              sed -E 's/.*strategy\s*[:(]?\s*:?([a-zA-Z_]+).*/\1/' | head -1)
             
-            echo "🔍 检测到 livecheck 策略: $livecheck_strategy"
+            # 如果没有明确策略，尝试从 URL 推断
+            if [[ -z "$livecheck_strategy" ]]; then
+              local livecheck_url_check
+              livecheck_url_check=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'url\s+"[^"]+"' | head -1)
+              
+              if [[ "$livecheck_url_check" == *".xml"* ]]; then
+                livecheck_strategy="sparkle"
+              elif [[ "$livecheck_url_check" == *"github.com"* ]]; then
+                livecheck_strategy="github_releases"
+              else
+                livecheck_strategy="page_match"
+              fi
+            fi
             
+            echo "📋 检测到策略: ${livecheck_strategy:-auto}"
+            
+            # 根据策略类型选择处理方式
             case "$livecheck_strategy" in
-              "sparkle")
-                handle_sparkle_update "$cask_file" "$cask_name"
-                ;;
-              "page_match")
-                handle_page_match_update "$cask_file" "$cask_name"
+              "github_releases"|"github_latest")
+                echo "ℹ️  GitHub 策略应由主要逻辑处理，跳过 $cask_name"
                 ;;
               *)
-                echo "ℹ️  暂不支持 $livecheck_strategy 策略，跳过更新"
+                echo "ℹ️  使用通用策略处理: ${livecheck_strategy:-auto}，处理 $cask_name"
+                handle_non_github_update "$cask_file" "$cask_name"
                 ;;
             esac
           }
           
-          # 处理 Sparkle feed 更新
-          handle_sparkle_update() {
+          # 处理非 GitHub 仓库的通用更新
+          handle_non_github_update() {
             local cask_file="$1"
             local cask_name="$2"
             
-            echo "🔍 使用 Sparkle 策略获取更新信息"
+            echo "🔍 使用通用策略获取更新信息"
             
             # 提取当前版本
             local current_version
@@ -267,38 +281,125 @@ jobs:
             
             echo "📋 当前版本: $current_version"
             
-            # 获取 Sparkle feed URL
-            local sparkle_url
-            sparkle_url=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'url\s+".*xml"' | \
-              sed -E 's/.*url\s+"([^"]+)".*/\1/')
+            # 从 livecheck 配置中获取 URL（通用方式）
+            local livecheck_url
+            livecheck_url=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'url\s+"[^"]+"' | \
+              sed -E 's/.*url\s+"([^"]+)".*/\1/' | head -1)
             
-            if [[ -n "$sparkle_url" ]]; then
+            if [[ -n "$livecheck_url" ]]; then
               # 替换版本变量（通用处理）
-              if [[ "$sparkle_url" == *"#{version.major}"* ]]; then
+              if [[ "$livecheck_url" == *"#{version.major}"* ]]; then
                 local major_version
                 major_version=$(echo "$current_version" | cut -d',' -f1 | cut -d'.' -f1)
-                sparkle_url=$(echo "$sparkle_url" | sed "s/#{version.major}/$major_version/g")
+                livecheck_url=$(echo "$livecheck_url" | sed "s/#{version.major}/$major_version/g")
               fi
               
-              echo "🔗 Sparkle feed URL: $sparkle_url"
+              # 支持更多版本变量替换
+              if [[ "$livecheck_url" == *"#{version}"* ]]; then
+                local clean_version
+                clean_version=$(echo "$current_version" | cut -d',' -f1)
+                livecheck_url=$(echo "$livecheck_url" | sed "s/#{version}/$clean_version/g")
+              fi
               
-              # 获取 Sparkle feed 内容
+              echo "🔗 Livecheck URL: $livecheck_url"
+              
+              # 重新检测策略类型以确保准确性
+              local strategy_type
+              strategy_type=$(grep -A 15 'livecheck do' "$cask_file" | \
+                grep -E '(strategy\s+:|strategy\s*\(|:\s*sparkle|:\s*page_match)' | \
+                sed -E 's/.*strategy\s*[:(]?\s*:?([a-zA-Z_]+).*/\1/' | head -1)
+              
+              # 如果没有明确策略，从 URL 和内容推断
+              if [[ -z "$strategy_type" ]]; then
+                if [[ "$livecheck_url" == *".xml"* ]]; then
+                  strategy_type="sparkle"
+                elif [[ "$livecheck_url" == *"github.com"* ]]; then
+                  strategy_type="github_releases"
+                else
+                  strategy_type="page_match"
+                fi
+              fi
+              
+              echo "📋 使用策略类型: ${strategy_type:-auto}"
+              
+              # 获取 livecheck URL 内容
               local feed_content
-              feed_content=$(curl -s "$sparkle_url" 2>/dev/null)
+              feed_content=$(curl -s "$livecheck_url" 2>/dev/null)
               
               if [[ -n "$feed_content" ]]; then
-                echo "📄 成功获取 Sparkle feed 内容"
+                echo "📄 成功获取 livecheck 内容"
                 
-                # 从 XML 中提取最新的 enclosure URL（通用匹配）
+                # 根据策略类型和内容格式提取下载链接
                 local latest_url
-                latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/url="//;s/"//')
+                case "$strategy_type" in
+                  "sparkle"|"xml"|"rss"|"atom")
+                    # Sparkle feed (XML 格式)
+                    latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/url="//;s/"//')
+                    ;;
+                  "json")
+                    # JSON 格式
+                    latest_url=$(echo "$feed_content" | grep -o '"[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/"//g')
+                    ;;
+                  "page_match"|"regex"|"xpath")
+                    # HTML 或其他格式，尝试通用链接提取
+                    latest_url=$(echo "$feed_content" | grep -o 'https\?://[^"\s]*\.(zip|dmg|pkg)' | head -1)
+                    ;;
+                  *)
+                    # 自动检测格式
+                    if [[ "$livecheck_url" == *".xml"* || "$feed_content" == *"<enclosure"* ]]; then
+                      latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/url="//;s/"//')
+                    elif [[ "$feed_content" == *"{"* && "$feed_content" == *"}"* ]]; then
+                      latest_url=$(echo "$feed_content" | grep -o '"[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/"//g')
+                    else
+                      latest_url=$(echo "$feed_content" | grep -o 'https\?://[^"\s]*\.(zip|dmg|pkg)' | head -1)
+                    fi
+                    ;;
+                esac
                 
                 if [[ -n "$latest_url" ]]; then
                   echo "🔗 找到最新下载链接: $latest_url"
                   
-                  # 通用版本提取逻辑
+                  # 智能版本提取逻辑
                   local new_version
-                  new_version=$(extract_version_from_url "$latest_url" "$current_version")
+                  
+                  if [[ "$strategy_type" == "sparkle" ]]; then
+                    # 对于 Sparkle 策略，尝试从 URL 中提取版本信息
+                    # 因为 Sparkle 的 regex 通常用于处理 URL 而不是 feed 内容
+                    echo "📋 使用 Sparkle 策略从 URL 提取版本"
+                    new_version=$(extract_version_from_url "$latest_url" "$current_version")
+                    
+                    # 如果从 URL 提取失败，尝试从 feed 内容中提取
+                    if [[ -z "$new_version" ]]; then
+                      # 尝试从 livecheck 配置中获取 regex
+                      local livecheck_regex
+                      livecheck_regex=$(grep -A 20 'livecheck do' "$cask_file" | grep -E 'regex\(' | \
+                        sed -E 's/.*regex\(([^)]+)\).*/\1/' | head -1)
+                      
+                      if [[ -n "$livecheck_regex" ]]; then
+                        echo "📋 回退使用 livecheck regex: $livecheck_regex"
+                        # 清理 regex 中的转义字符和引号
+                        livecheck_regex=$(echo "$livecheck_regex" | sed 's/\\\\/\\/g' | sed 's/^["'\'']//;s/["'\'']$//')
+                        new_version=$(echo "$latest_url" | grep -oE "$livecheck_regex" | head -1)
+                      fi
+                    fi
+                  else
+                    # 对于其他策略，尝试从 livecheck 配置中获取 regex
+                    local livecheck_regex
+                    livecheck_regex=$(grep -A 15 'livecheck do' "$cask_file" | grep -E 'regex\(' | \
+                      sed -E 's/.*regex\(([^)]+)\).*/\1/' | head -1)
+                    
+                    if [[ -n "$livecheck_regex" ]]; then
+                      echo "📋 使用 livecheck regex: $livecheck_regex"
+                      # 清理 regex 中的转义字符和引号
+                      livecheck_regex=$(echo "$livecheck_regex" | sed 's/\\\\/\\/g' | sed 's/^["'\'']//;s/["'\'']$//')
+                      new_version=$(echo "$feed_content" | grep -oE "$livecheck_regex" | head -1)
+                    fi
+                    
+                    # 如果 regex 提取失败，回退到 URL 提取
+                    if [[ -z "$new_version" ]]; then
+                      new_version=$(extract_version_from_url "$latest_url" "$current_version")
+                    fi
+                  fi
                   
                   if [[ -n "$new_version" && "$new_version" != "$current_version" ]]; then
                     echo "📦 发现新版本: $current_version → $new_version"
@@ -324,24 +425,18 @@ jobs:
                     echo "ℹ️  $cask_name 已是最新版本或无法解析版本"
                   fi
                 else
-                  echo "⚠️  无法从 Sparkle feed 中提取下载链接"
+                  echo "⚠️  无法从 livecheck 内容中提取下载链接"
                 fi
               else
-                echo "⚠️  无法获取 Sparkle feed 内容"
+                echo "⚠️  无法获取 livecheck 内容"
               fi
             else
-              echo "⚠️  未找到 Sparkle feed URL"
+              echo "⚠️  未找到 livecheck URL"
             fi
           }
           
-          # 处理页面匹配更新
-          handle_page_match_update() {
-            local cask_file="$1"
-            local cask_name="$2"
-            
-            echo "🔍 使用页面匹配策略获取更新信息"
-            echo "ℹ️  页面匹配策略暂未实现，跳过 $cask_name"
-          }
+          # 通用版本提取函数
+
           
           # 从 URL 中提取版本信息的通用函数
           extract_version_from_url() {
