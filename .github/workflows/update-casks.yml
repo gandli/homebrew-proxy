@@ -5,6 +5,11 @@ name: Update Casks
   schedule:
     - cron: 0 2 * * *
   workflow_dispatch: {}
+  push:
+    paths:
+      - 'Casks/*.rb'
+    branches:
+      - main
 
 # 防止并发执行，避免API速率限制冲突
 concurrency:
@@ -15,6 +20,8 @@ jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 60  # 设置超时时间
+    # 避免循环触发：排除由 GitHub Actions 自动提交的推送
+    if: github.actor != 'github-actions[bot]'
     steps:
       - uses: actions/checkout@v4
 
@@ -212,6 +219,106 @@ jobs:
             fi
           }
 
+          # 处理非 GitHub 仓库的特殊更新逻辑
+          update_non_github_cask() {
+            local cask_file="$1"
+            echo "🌐 处理非 GitHub 仓库: $cask_file"
+            
+            local cask_name
+            cask_name=$(basename "$cask_file" .rb)
+            
+            # 特殊处理 Surge 应用
+            if [[ "$cask_name" == "surge@4" ]]; then
+              echo "🔍 检测到 Surge 应用，尝试从 Sparkle feed 获取更新信息"
+              
+              # 提取当前版本
+              local current_version
+              current_version=$(grep -E '^\s*version\s+' "$cask_file" | head -1 | \
+                sed -E 's/.*version\s+"([^"]+)".*/\1/')
+              
+              echo "📋 当前版本: $current_version"
+              
+              # 获取 Sparkle feed URL（从 livecheck 部分提取）
+               local sparkle_url
+               sparkle_url=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'url\s+".*xml"' | \
+                 sed -E 's/.*url\s+"([^"]+)".*/\1/')
+               
+               if [[ -n "$sparkle_url" ]]; then
+                 # 替换版本变量
+                 local major_version
+                 major_version=$(echo "$current_version" | cut -d',' -f1 | cut -d'.' -f1)
+                 sparkle_url=$(echo "$sparkle_url" | sed "s/#{version.major}/$major_version/g")
+                 
+                 echo "🔗 Sparkle feed URL: $sparkle_url"
+                 
+                 # 获取 Sparkle feed 内容
+                 local feed_content
+                 feed_content=$(curl -s "$sparkle_url" 2>/dev/null)
+                 
+                 if [[ -n "$feed_content" ]]; then
+                   echo "📄 成功获取 Sparkle feed 内容"
+                   
+                   # 从 XML 中提取最新的 enclosure URL
+                   local latest_url
+                   latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*Surge-[^"]*\.zip"' | head -1 | sed 's/url="//;s/"//')
+                   
+                   if [[ -n "$latest_url" ]]; then
+                     echo "🔗 找到最新下载链接: $latest_url"
+                     
+                     # 使用正则表达式提取版本信息（匹配 Surge-x.x.x-xxxx-hash.zip 格式）
+                     local version_match
+                     version_match=$(echo "$latest_url" | grep -oE 'Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip')
+                     
+                     if [[ -n "$version_match" ]]; then
+                       # 提取版本号的各个部分
+                       local version_part build_part hash_part
+                       version_part=$(echo "$version_match" | sed -E 's/Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip/\1/')
+                       build_part=$(echo "$version_match" | sed -E 's/Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip/\2/')
+                       hash_part=$(echo "$version_match" | sed -E 's/Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip/\3/')
+                       
+                       local new_version="$version_part,$build_part,$hash_part"
+                       echo "📋 解析的新版本: $new_version"
+                       
+                       if [[ "$new_version" != "$current_version" ]]; then
+                         echo "📦 发现新版本: $current_version → $new_version"
+                         
+                         # 下载并计算 SHA256
+                         echo "📥 正在下载并计算 SHA256..."
+                         local sha256
+                         sha256=$(curl -sL --fail "$latest_url" | shasum -a 256 | awk '{print $1}')
+                         
+                         if [[ -n "$sha256" && ${#sha256} -eq 64 ]]; then
+                           echo "🔒 计算的 SHA256: $sha256"
+                           
+                           # 更新 cask 文件
+                           sed -i "s/version \".*\"/version \"$new_version\"/" "$cask_file"
+                           sed -i "s/sha256 \".*\"/sha256 \"$sha256\"/" "$cask_file"
+                           
+                           echo "✅ 成功更新 $cask_name"
+                           echo "📝 版本更新: $current_version → $new_version"
+                         else
+                           echo "❌ 计算 SHA256 失败"
+                         fi
+                       else
+                         echo "ℹ️  $cask_name 已是最新版本"
+                       fi
+                     else
+                       echo "⚠️  无法从下载链接中解析版本信息"
+                     fi
+                   else
+                     echo "⚠️  无法从 Sparkle feed 中提取下载链接"
+                   fi
+                 else
+                   echo "⚠️  无法获取 Sparkle feed 内容"
+                 fi
+               else
+                 echo "⚠️  未找到 Sparkle feed URL"
+               fi
+            else
+              echo "ℹ️  $cask_name 不是已知的非 GitHub 仓库应用，跳过更新"
+            fi
+          }
+
           # 更新单个 cask 文件的函数
           update_cask() {
             local cask_file="$1"
@@ -220,6 +327,7 @@ jobs:
 
             echo "🔄 正在处理 $cask_file..."
 
+            # 检查是否为 GitHub 仓库
             if [[ "$repo_url" == *"github.com"* && -n "$asset_pattern" ]]; then
               owner_repo=$(echo "$repo_url" | sed -e 's|https://github.com/||' -e 's|/$||')
 
@@ -563,7 +671,8 @@ jobs:
                 fi
               fi
             else
-              echo "⚠️  跳过 $cask_file (不是 GitHub 仓库或缺少资产模式)"
+              echo "🌐 检测到非 GitHub 仓库，尝试使用替代更新方法"
+              update_non_github_cask "$cask_file"
             fi
             echo "---"
           }
