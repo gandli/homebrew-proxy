@@ -698,7 +698,7 @@ jobs:
               # 构建详细的提交信息
               commit_message="🚀 更新 Homebrew Casks
 
-              本次更新包含以下应用:${commit_details}
+              本次更新包含以下应用:$(echo -e "${commit_details}")
 
               📅 更新时间: $(date '+%Y-%m-%d %H:%M:%S')
               🤖 自动更新 by GitHub Actions"

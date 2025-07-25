@@ -1,7 +1,7 @@
 ---
 name: Create Release
 
-# 触发条件：手动触发或每月第一天自动触发
+# 触发条件：手动触发、每月第一天自动触发或当 update-casks 工作流完成时触发
 on:
   workflow_dispatch:
     inputs:
@@ -22,6 +22,13 @@ on:
   schedule:
     # 每月1号 UTC 时间 02:00 (北京时间 10:00) 自动创建 release
     - cron: '0 2 1 * *'
+  workflow_run:
+    # 当 update-casks 工作流成功完成时自动触发
+    workflows: ["Update Casks"]
+    types:
+      - completed
+    branches:
+      - main
 
 # 防止并发执行
 concurrency:
@@ -31,6 +38,8 @@ concurrency:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    # 只有当 workflow_run 事件成功完成或者是其他触发方式时才执行
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: write
       pull-requests: read
