@@ -219,7 +219,7 @@ jobs:
             fi
           }
 
-          # 处理非 GitHub 仓库的特殊更新逻辑
+          # 处理非 GitHub 仓库的通用更新逻辑
           update_non_github_cask() {
             local cask_file="$1"
             echo "🌐 处理非 GitHub 仓库: $cask_file"
@@ -227,96 +227,156 @@ jobs:
             local cask_name
             cask_name=$(basename "$cask_file" .rb)
             
-            # 特殊处理 Surge 应用
-            if [[ "$cask_name" == "surge@4" ]]; then
-              echo "🔍 检测到 Surge 应用，尝试从 Sparkle feed 获取更新信息"
-              
-              # 提取当前版本
-              local current_version
-              current_version=$(grep -E '^\s*version\s+' "$cask_file" | head -1 | \
-                sed -E 's/.*version\s+"([^"]+)".*/\1/')
-              
-              echo "📋 当前版本: $current_version"
-              
-              # 获取 Sparkle feed URL（从 livecheck 部分提取）
-               local sparkle_url
-               sparkle_url=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'url\s+".*xml"' | \
-                 sed -E 's/.*url\s+"([^"]+)".*/\1/')
-               
-               if [[ -n "$sparkle_url" ]]; then
-                 # 替换版本变量
-                 local major_version
-                 major_version=$(echo "$current_version" | cut -d',' -f1 | cut -d'.' -f1)
-                 sparkle_url=$(echo "$sparkle_url" | sed "s/#{version.major}/$major_version/g")
-                 
-                 echo "🔗 Sparkle feed URL: $sparkle_url"
-                 
-                 # 获取 Sparkle feed 内容
-                 local feed_content
-                 feed_content=$(curl -s "$sparkle_url" 2>/dev/null)
-                 
-                 if [[ -n "$feed_content" ]]; then
-                   echo "📄 成功获取 Sparkle feed 内容"
-                   
-                   # 从 XML 中提取最新的 enclosure URL
-                   local latest_url
-                   latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*Surge-[^"]*\.zip"' | head -1 | sed 's/url="//;s/"//')
-                   
-                   if [[ -n "$latest_url" ]]; then
-                     echo "🔗 找到最新下载链接: $latest_url"
-                     
-                     # 使用正则表达式提取版本信息（匹配 Surge-x.x.x-xxxx-hash.zip 格式）
-                     local version_match
-                     version_match=$(echo "$latest_url" | grep -oE 'Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip')
-                     
-                     if [[ -n "$version_match" ]]; then
-                       # 提取版本号的各个部分
-                       local version_part build_part hash_part
-                       version_part=$(echo "$version_match" | sed -E 's/Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip/\1/')
-                       build_part=$(echo "$version_match" | sed -E 's/Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip/\2/')
-                       hash_part=$(echo "$version_match" | sed -E 's/Surge-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\.zip/\3/')
-                       
-                       local new_version="$version_part,$build_part,$hash_part"
-                       echo "📋 解析的新版本: $new_version"
-                       
-                       if [[ "$new_version" != "$current_version" ]]; then
-                         echo "📦 发现新版本: $current_version → $new_version"
-                         
-                         # 下载并计算 SHA256
-                         echo "📥 正在下载并计算 SHA256..."
-                         local sha256
-                         sha256=$(curl -sL --fail "$latest_url" | shasum -a 256 | awk '{print $1}')
-                         
-                         if [[ -n "$sha256" && ${#sha256} -eq 64 ]]; then
-                           echo "🔒 计算的 SHA256: $sha256"
-                           
-                           # 更新 cask 文件
-                           sed -i "s/version \".*\"/version \"$new_version\"/" "$cask_file"
-                           sed -i "s/sha256 \".*\"/sha256 \"$sha256\"/" "$cask_file"
-                           
-                           echo "✅ 成功更新 $cask_name"
-                           echo "📝 版本更新: $current_version → $new_version"
-                         else
-                           echo "❌ 计算 SHA256 失败"
-                         fi
-                       else
-                         echo "ℹ️  $cask_name 已是最新版本"
-                       fi
-                     else
-                       echo "⚠️  无法从下载链接中解析版本信息"
-                     fi
-                   else
-                     echo "⚠️  无法从 Sparkle feed 中提取下载链接"
-                   fi
-                 else
-                   echo "⚠️  无法获取 Sparkle feed 内容"
-                 fi
-               else
-                 echo "⚠️  未找到 Sparkle feed URL"
-               fi
-            else
-              echo "ℹ️  $cask_name 不是已知的非 GitHub 仓库应用，跳过更新"
+            # 检查是否有 livecheck 配置
+            if ! grep -q 'livecheck do' "$cask_file"; then
+              echo "ℹ️  $cask_name 没有 livecheck 配置，跳过更新"
+              return
             fi
+            
+            # 提取 livecheck 策略
+            local livecheck_strategy
+            livecheck_strategy=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'strategy\s+:' | \
+              sed -E 's/.*strategy\s+:([a-zA-Z_]+).*/\1/' | head -1)
+            
+            echo "🔍 检测到 livecheck 策略: $livecheck_strategy"
+            
+            case "$livecheck_strategy" in
+              "sparkle")
+                handle_sparkle_update "$cask_file" "$cask_name"
+                ;;
+              "page_match")
+                handle_page_match_update "$cask_file" "$cask_name"
+                ;;
+              *)
+                echo "ℹ️  暂不支持 $livecheck_strategy 策略，跳过更新"
+                ;;
+            esac
+          }
+          
+          # 处理 Sparkle feed 更新
+          handle_sparkle_update() {
+            local cask_file="$1"
+            local cask_name="$2"
+            
+            echo "🔍 使用 Sparkle 策略获取更新信息"
+            
+            # 提取当前版本
+            local current_version
+            current_version=$(grep -E '^\s*version\s+' "$cask_file" | head -1 | \
+              sed -E 's/.*version\s+"([^"]+)".*/\1/')
+            
+            echo "📋 当前版本: $current_version"
+            
+            # 获取 Sparkle feed URL
+            local sparkle_url
+            sparkle_url=$(grep -A 10 'livecheck do' "$cask_file" | grep -E 'url\s+".*xml"' | \
+              sed -E 's/.*url\s+"([^"]+)".*/\1/')
+            
+            if [[ -n "$sparkle_url" ]]; then
+              # 替换版本变量（通用处理）
+              if [[ "$sparkle_url" == *"#{version.major}"* ]]; then
+                local major_version
+                major_version=$(echo "$current_version" | cut -d',' -f1 | cut -d'.' -f1)
+                sparkle_url=$(echo "$sparkle_url" | sed "s/#{version.major}/$major_version/g")
+              fi
+              
+              echo "🔗 Sparkle feed URL: $sparkle_url"
+              
+              # 获取 Sparkle feed 内容
+              local feed_content
+              feed_content=$(curl -s "$sparkle_url" 2>/dev/null)
+              
+              if [[ -n "$feed_content" ]]; then
+                echo "📄 成功获取 Sparkle feed 内容"
+                
+                # 从 XML 中提取最新的 enclosure URL（通用匹配）
+                local latest_url
+                latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/url="//;s/"//')
+                
+                if [[ -n "$latest_url" ]]; then
+                  echo "🔗 找到最新下载链接: $latest_url"
+                  
+                  # 通用版本提取逻辑
+                  local new_version
+                  new_version=$(extract_version_from_url "$latest_url" "$current_version")
+                  
+                  if [[ -n "$new_version" && "$new_version" != "$current_version" ]]; then
+                    echo "📦 发现新版本: $current_version → $new_version"
+                    
+                    # 下载并计算 SHA256
+                    echo "📥 正在下载并计算 SHA256..."
+                    local sha256
+                    sha256=$(curl -sL --fail "$latest_url" | shasum -a 256 | awk '{print $1}')
+                    
+                    if [[ -n "$sha256" && ${#sha256} -eq 64 ]]; then
+                      echo "🔒 计算的 SHA256: $sha256"
+                      
+                      # 更新 cask 文件
+                      sed -i "s/version \".*\"/version \"$new_version\"/" "$cask_file"
+                      sed -i "s/sha256 \".*\"/sha256 \"$sha256\"/" "$cask_file"
+                      
+                      echo "✅ 成功更新 $cask_name"
+                      echo "📝 版本更新: $current_version → $new_version"
+                    else
+                      echo "❌ 计算 SHA256 失败"
+                    fi
+                  else
+                    echo "ℹ️  $cask_name 已是最新版本或无法解析版本"
+                  fi
+                else
+                  echo "⚠️  无法从 Sparkle feed 中提取下载链接"
+                fi
+              else
+                echo "⚠️  无法获取 Sparkle feed 内容"
+              fi
+            else
+              echo "⚠️  未找到 Sparkle feed URL"
+            fi
+          }
+          
+          # 处理页面匹配更新
+          handle_page_match_update() {
+            local cask_file="$1"
+            local cask_name="$2"
+            
+            echo "🔍 使用页面匹配策略获取更新信息"
+            echo "ℹ️  页面匹配策略暂未实现，跳过 $cask_name"
+          }
+          
+          # 从 URL 中提取版本信息的通用函数
+          extract_version_from_url() {
+            local url="$1"
+            local current_version="$2"
+            
+            # 提取文件名
+            local filename
+            filename=$(basename "$url")
+            
+            # 尝试多种版本匹配模式
+            local version_patterns=(
+              # 模式1: App-x.x.x-xxxx-hash.zip (如 Surge)
+              's/.*-([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-([a-f0-9]+)\..*/\1,\2,\3/'
+              # 模式2: App-x.x.x.zip
+              's/.*-([0-9]+\.[0-9]+\.[0-9]+)\..*/\1/'
+              # 模式3: App_x.x.x.zip
+              's/.*_([0-9]+\.[0-9]+\.[0-9]+)\..*/\1/'
+              # 模式4: Appx.x.x.zip
+              's/.*([0-9]+\.[0-9]+\.[0-9]+)\..*/\1/'
+            )
+            
+            for pattern in "${version_patterns[@]}"; do
+              local extracted_version
+              extracted_version=$(echo "$filename" | sed -E "$pattern")
+              
+              # 检查是否成功提取到版本（不等于原文件名）
+              if [[ "$extracted_version" != "$filename" && -n "$extracted_version" ]]; then
+                echo "$extracted_version"
+                return 0
+              fi
+            done
+            
+            echo "" # 未找到版本
+            return 1
           }
 
           # 更新单个 cask 文件的函数
