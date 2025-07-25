@@ -333,8 +333,15 @@ jobs:
                 local latest_url
                 case "$strategy_type" in
                   "sparkle"|"xml"|"rss"|"atom")
-                    # Sparkle feed (XML 格式)
-                    latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/url="//;s/"//')
+                    # Sparkle feed (XML 格式) - 支持多种 enclosure 格式
+                    latest_url=$(echo "$feed_content" | grep -oE 'enclosure[^>]*url="[^"]*\.(zip|dmg|pkg)"[^>]*' | \
+                      sed -E 's/.*url="([^"]*\.(zip|dmg|pkg))".*/\1/' | head -1)
+                    
+                    # 如果没有找到 enclosure，尝试其他 URL 格式
+                    if [[ -z "$latest_url" ]]; then
+                      latest_url=$(echo "$feed_content" | grep -oE 'url="[^"]*\.(zip|dmg|pkg)"' | \
+                        sed 's/url="//;s/"//' | head -1)
+                    fi
                     ;;
                   "json")
                     # JSON 格式
@@ -347,7 +354,15 @@ jobs:
                   *)
                     # 自动检测格式
                     if [[ "$livecheck_url" == *".xml"* || "$feed_content" == *"<enclosure"* ]]; then
-                      latest_url=$(echo "$feed_content" | grep -o 'url="[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/url="//;s/"//')
+                      # XML/Sparkle feed 格式 - 支持 enclosure 标签
+                      latest_url=$(echo "$feed_content" | grep -oE 'enclosure[^>]*url="[^"]*\.(zip|dmg|pkg)"[^>]*' | \
+                        sed -E 's/.*url="([^"]*\.(zip|dmg|pkg))".*/\1/' | head -1)
+                      
+                      # 如果没有找到 enclosure，尝试其他 URL 格式
+                      if [[ -z "$latest_url" ]]; then
+                        latest_url=$(echo "$feed_content" | grep -oE 'url="[^"]*\.(zip|dmg|pkg)"' | \
+                          sed 's/url="//;s/"//' | head -1)
+                      fi
                     elif [[ "$feed_content" == *"{"* && "$feed_content" == *"}"* ]]; then
                       latest_url=$(echo "$feed_content" | grep -o '"[^"]*\.(zip|dmg|pkg)"' | head -1 | sed 's/"//g')
                     else
