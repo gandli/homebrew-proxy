@@ -1,10 +1,10 @@
 cask "mihomo-party" do
   arch arm: "arm64", intel: "x64"
 
-  version "1.8.0"
+  version "1.8.1"
 
   on_catalina :or_older do
-    sha256 arm:   "dfc70213e71c35cae5d549b4982ff5579b5621a0430bea86a7c91bd3e8aa0a84",
+    sha256 arm:   "4d22322c3a6e2407634f758af8d2f24270a5cdd3e98d10b502bbccc32befe701",
            intel: "64d22ad27467f7eaf890a40d5d16ac987b1af0fbd4c10c1b17d00f0186acde8f"
 
     url "https://github.com/mihomo-party-org/mihomo-party/releases/download/v#{version}/mihomo-party-catalina-#{version}-#{arch}.pkg",
@@ -13,7 +13,7 @@ cask "mihomo-party" do
     pkg "mihomo-party-catalina-#{version}-#{arch}.pkg"
   end
   on_big_sur :or_newer do
-    sha256 arm:   "dfc70213e71c35cae5d549b4982ff5579b5621a0430bea86a7c91bd3e8aa0a84",
+    sha256 arm:   "4d22322c3a6e2407634f758af8d2f24270a5cdd3e98d10b502bbccc32befe701",
            intel: "9876bc07389c0b2e94cccc1dcc03c86560fbc7a0a34932c28148bb2b4bba6fd9"
 
     url "https://github.com/mihomo-party-org/mihomo-party/releases/download/v#{version}/mihomo-party-macos-#{version}-#{arch}.pkg",
