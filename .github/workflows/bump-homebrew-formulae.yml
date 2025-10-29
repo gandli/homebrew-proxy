@@ -49,15 +49,29 @@ jobs:
       - name: Checkout Tap repository
         uses: actions/checkout@v4
 
-      - name: Bump ${{ matrix.formula }} formula
-        uses: brew-actions/bump-formula-pr@v1
-        with:
-          formula-name: ${{ matrix.formula }}
-          homebrew-tap: gandli/homebrew-proxy # ← 替换为你的 Tap 仓库（owner/repo）
-          token: ${{ secrets.GH_TOKEN }} # ← 使用你设置的 PAT（需 repo 权限）
-          commit-message: "${{ matrix.formula }}: bump to latest version"
-          title: "Bump ${{ matrix.formula }} to latest version"
-          body: "This PR bumps ${{ matrix.formula }} to its latest version."
+      - name: Configure git identity (for PR commits)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup Homebrew environment
+        run: |
+          # Homebrew is preinstalled on ubuntu-latest but not added to PATH
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew --version
+          brew update
+          # Ensure tap is available locally
+          brew tap gandli/proxy || true
+
+      - name: Bump ${{ matrix.formula }} cask via Homebrew
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -e
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "Attempting bump for cask: ${{ matrix.formula }}"
+          # Try bump-cask-pr (auto-livecheck); if not supported or no update, do not fail the whole matrix item
+          brew bump-cask-pr "${{ matrix.formula }}" --message "Bump ${{ matrix.formula }} to latest version" || echo "No bump or command failed for ${{ matrix.formula }}; continuing"
 
   release:
     name: Create GitHub Release with Cask assets
