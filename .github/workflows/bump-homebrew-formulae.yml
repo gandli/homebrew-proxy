@@ -56,7 +56,7 @@ jobs:
         with:
           formula-name: ${{ matrix.formula }}
           homebrew-tap: gandli/homebrew-proxy # ← 替换为你的 Tap 仓库（owner/repo）
-          token: ${{ secrets.HOMEBREW_UPDATE_TOKEN }} # ← 使用你设置的 PAT（需 repo 权限）
+          token: ${{ secrets.GH_TOKEN }} # ← 使用你设置的 PAT（需 repo 权限）
           commit-message: "${{ matrix.formula }}: bump to latest version"
           title: "Bump ${{ matrix.formula }} to latest version"
           body: "This PR bumps ${{ matrix.formula }} to its latest version."
