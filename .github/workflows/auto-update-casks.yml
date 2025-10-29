@@ -1,9 +1,9 @@
-name: Auto Update Casks
+name: Auto Update & Merge Casks
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 运行，可改为本地时间对应时区
+    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 运行
 
 jobs:
   bump-casks:
@@ -28,8 +28,22 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Bump all casks
+        id: bump
         uses: Homebrew/actions/bump-packages@main
         with:
           token: ${{ secrets.GH_TOKEN }}
           casks: ${{ steps.list.outputs.casks }}
           fork: false
+
+      - name: Wait for PR creation
+        run: sleep 60
+
+      - name: Auto merge bump PRs
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          gh pr list --state open --author "$(git config user.name)" --json number,title \
+            | jq -r '.[].number' | while read pr; do
+                echo "Merging PR #$pr"
+                gh pr merge "$pr" --squash --delete-branch --admin
+              done
