@@ -3,58 +3,35 @@ name: Auto Update Casks
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"  # 每 6 小时执行一次
-
-permissions:
-  contents: write
+    - cron: '0 3 * * *' # 每天凌晨 3 点 UTC 运行
 
 jobs:
   bump-casks:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GH_TOKEN }}
 
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@master
 
-      - name: Update Homebrew
-        run: brew update-reset
+      - name: Bump Casks
+        uses: Homebrew/actions/bump-packages@main
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+          # 指定只更新自建 Tap 下的 Casks 目录内容
+          casks: |
+            $(find Casks -type f -name "*.rb" -exec basename {} .rb \;)
+          fork: false
 
-      - name: Update all Casks in Tap
-        env:
-          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Commit changes
         run: |
-          set -eux
-          brew tap gandli/proxy https://github.com/gandli/homebrew-proxy
-          cd "$(brew --repo gandli/proxy)/Casks"
-
-          for cask in *.rb; do
-            cask_name="${cask%.rb}"
-            echo "Checking $cask_name ..."
-            if grep -qE 'no_autobump!|livecheck do.*skip' "$cask"; then
-              echo "Skipping $cask_name (autobump disabled)"
-              continue
-            fi
-
-            if brew livecheck --cask "gandli/proxy/$cask_name" | grep -q "Newer version available"; then
-              echo "Updating $cask_name ..."
-              brew bump-cask-pr --write-only --commit --no-audit --no-style "gandli/proxy/$cask_name" || true
-            fi
-          done
-
-      - name: Commit and push changes
-        run: |
-          cd "$(brew --repo gandli/proxy)"
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: auto-update casks"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add Casks/
+            git commit -m "Auto update casks"
             git push origin HEAD
           else
-            echo "No updates found."
+            echo "No changes to commit."
           fi
