@@ -1,107 +1,35 @@
-name: Bump All Formulae
+name: Auto Update Casks
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: "0 0 * * *" # 每天 UTC 午夜自动运行一次（可调整）
-  workflow_dispatch: # 支持手动触发
-
-# 防止并发重复运行同一工作流
-concurrency:
-  group: bump-homebrew-formulae
-  cancel-in-progress: true
-
-# 需要写权限以创建/更新 PR
-permissions:
-  contents: write
-  pull-requests: write
+    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 运行，可改为本地时间对应时区
 
 jobs:
-  discover:
-    runs-on: ubuntu-latest
-    outputs:
-      formula: ${{ steps.generate.outputs.formula }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Generate matrix from Casks directory
-        id: generate
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const dir = 'Casks';
-            const files = fs.readdirSync(dir).filter(f => f.endsWith('.rb'));
-            const names = files.map(f => path.parse(f).name).sort();
-            core.info(`Discovered casks: ${names.join(', ')}`);
-            core.setOutput('formula', JSON.stringify(names));
-
-  bump:
-    runs-on: ubuntu-latest
-    needs: discover
-
-    strategy:
-      matrix:
-        formula: ${{ fromJSON(needs.discover.outputs.formula) }}
-      fail-fast: false # 即使某个 Formula 更新失败，也继续处理其他的
-
-    steps:
-      - name: Checkout Tap repository
-        uses: actions/checkout@v4
-
-      - name: Configure git identity (for PR commits)
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Setup Homebrew environment
-        run: |
-          # Homebrew is preinstalled on ubuntu-latest but not added to PATH
-          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-          brew --version
-          brew update
-          # Ensure tap is available locally
-          brew tap gandli/proxy || true
-
-      - name: Bump ${{ matrix.formula }} cask via Homebrew
-        env:
-          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          set -e
-          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-          echo "Attempting bump for cask: ${{ matrix.formula }}"
-          # Use livecheck to discover latest version
-          LATEST_JSON=$(brew livecheck --json --cask "${{ matrix.formula }}" || true)
-          echo "$LATEST_JSON" | jq '.' || true
-          NEW_VERSION=$(echo "$LATEST_JSON" | jq -r '.[0].latest.version // .[0].latest // .[0].version.latest // .[0].version.stable // empty')
-          if [ -z "$NEW_VERSION" ] || [ "$NEW_VERSION" = "null" ]; then
-            echo "No livecheck version found for ${{ matrix.formula }}, skipping bump."
-            exit 0
-          fi
-          echo "Livecheck suggests new version: $NEW_VERSION"
-          # Try bump-cask-pr with explicit version; if fails or no update, continue without failing matrix item
-          brew bump-cask-pr "${{ matrix.formula }}" --version "$NEW_VERSION" --message "Bump ${{ matrix.formula }} to $NEW_VERSION" || echo "No bump or command failed for ${{ matrix.formula }}; continuing"
-
-  release:
-    name: Create GitHub Release with Cask assets
-    runs-on: ubuntu-latest
-    needs: bump
+  bump-casks:
+    runs-on: macos-latest
     permissions:
       contents: write
+      pull-requests: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Setup GitHub CLI auth
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Homebrew
+        uses: Homebrew/actions/setup-homebrew@main
+
+      - name: List all casks
+        id: list
         run: |
-          echo "$GITHUB_TOKEN" | gh auth login --with-token
-          gh auth status
-      - name: Install jq dependency (if missing)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-      - name: Run create-release.sh (non-interactive)
-        run: |
-          chmod +x ./create-release.sh
-          yes | ./create-release.sh
+          echo "casks<<EOF" >> $GITHUB_OUTPUT
+          find Casks -type f -name "*.rb" \
+            | sed 's|Casks/||;s|.rb$||' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Bump all casks
+        uses: Homebrew/actions/bump-packages@main
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+          casks: ${{ steps.list.outputs.casks }}
+          fork: false
