@@ -3,11 +3,12 @@ name: Auto Update Casks
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *' # 每天凌晨 3 点 UTC 运行
+    - cron: '0 3 * * *' # 每天凌晨 3 点 UTC 执行
 
 jobs:
   bump-casks:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -15,13 +16,17 @@ jobs:
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@master
 
+      - name: Generate Cask List
+        id: casklist
+        run: |
+          CASKS=$(find Casks -type f -name "*.rb" -exec basename {} .rb \; | tr '\n' ' ')
+          echo "casks=$CASKS" >> $GITHUB_OUTPUT
+
       - name: Bump Casks
         uses: Homebrew/actions/bump-packages@main
         with:
           token: ${{ secrets.GH_TOKEN }}
-          # 指定只更新自建 Tap 下的 Casks 目录内容
-          casks: |
-            $(find Casks -type f -name "*.rb" -exec basename {} .rb \;)
+          casks: ${{ steps.casklist.outputs.casks }}
           fork: false
 
       - name: Commit changes
