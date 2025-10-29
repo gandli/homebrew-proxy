@@ -27,21 +27,20 @@ jobs:
       - name: Update all Casks in Tap
         run: |
           set -eux
-          TAP_PATH="$(brew --repo ${{ github.repository }})"
-          cd "$TAP_PATH/Casks"
+          brew tap-new gandli/proxy || true
+          brew tap gandli/proxy https://github.com/gandli/homebrew-proxy
+          cd "$(brew --repo gandli/proxy)/Casks"
 
           for cask in *.rb; do
             echo "Checking $cask ..."
-            # 跳过带有 no_autobump! 或 skip livecheck 的 cask
             if grep -qE 'no_autobump!|livecheck do.*skip' "$cask"; then
               echo "Skipping $cask (autobump disabled)"
               continue
             fi
 
-            # 检查是否有更新
-            if brew livecheck --cask "./$cask" | grep -q "Newer version available"; then
+            if brew livecheck --cask "gandli/proxy/$cask" | grep -q "Newer version available"; then
               echo "Updating $cask ..."
-              brew bump-cask-pr --write-only --commit --no-audit --no-style "./$cask" || true
+              brew bump-cask-pr --write-only --commit --no-audit --no-style "gandli/proxy/$cask" || true
             fi
           done
 
