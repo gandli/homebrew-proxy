@@ -1,0 +1,86 @@
+name: Bump Homebrew Formulae
+
+run-name: "Bump Homebrew formulae: ${{ join(matrix.formula, ', ') }}"
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # 每天 UTC 午夜自动运行一次（可调整）
+  workflow_dispatch: # 支持手动触发
+
+# 防止并发重复运行同一工作流
+concurrency:
+  group: bump-homebrew-formulae
+  cancel-in-progress: true
+
+# 需要写权限以创建/更新 PR
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      formula: ${{ steps.generate.outputs.formula }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Generate matrix from Casks directory
+        id: generate
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const dir = 'Casks';
+            const files = fs.readdirSync(dir).filter(f => f.endsWith('.rb'));
+            const names = files.map(f => path.parse(f).name).sort();
+            core.info(`Discovered casks: ${names.join(', ')}`);
+            core.setOutput('formula', JSON.stringify(names));
+
+  bump:
+    runs-on: ubuntu-latest
+    needs: discover
+
+    strategy:
+      matrix:
+        formula: ${{ fromJSON(needs.discover.outputs.formula) }}
+      fail-fast: false # 即使某个 Formula 更新失败，也继续处理其他的
+
+    steps:
+      - name: Checkout Tap repository
+        uses: actions/checkout@v4
+
+      - name: Bump ${{ matrix.formula }} formula
+        uses: brew-actions/bump-formula-pr@v1
+        with:
+          formula-name: ${{ matrix.formula }}
+          homebrew-tap: gandli/homebrew-proxy # ← 替换为你的 Tap 仓库（owner/repo）
+          token: ${{ secrets.HOMEBREW_UPDATE_TOKEN }} # ← 使用你设置的 PAT（需 repo 权限）
+          commit-message: "${{ matrix.formula }}: bump to latest version"
+          title: "Bump ${{ matrix.formula }} to latest version"
+          body: "This PR bumps ${{ matrix.formula }} to its latest version."
+
+  release:
+    name: Create GitHub Release with Cask assets
+    runs-on: ubuntu-latest
+    needs: bump
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup GitHub CLI auth
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | gh auth login --with-token
+          gh auth status
+      - name: Install jq dependency (if missing)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Run create-release.sh (non-interactive)
+        run: |
+          chmod +x ./create-release.sh
+          yes | ./create-release.sh
