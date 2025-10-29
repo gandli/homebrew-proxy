@@ -1,7 +1,5 @@
 # 🍺 Homebrew Proxy Tap | 精选 macOS 代理工具全家桶
 
-[![Update Casks](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/update-casks.yml) [![Create Release](https://github.com/gandli/homebrew-proxy/actions/workflows/create-release.yml/badge.svg)](https://github.com/gandli/homebrew-proxy/actions/workflows/create-release.yml) [![Latest Release](https://img.shields.io/github/v/release/gandli/homebrew-proxy?label=最新版本&color=blue)](https://github.com/gandli/homebrew-proxy/releases/latest)
-
 > 🚀 **精选 macOS 代理客户端集合** - 一键安装优质网络代理工具的 Homebrew Tap
 
 ## 📦 应用程序
