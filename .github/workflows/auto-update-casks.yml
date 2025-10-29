@@ -1,45 +1,35 @@
 name: Auto Update Casks
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *' # 每天凌晨 3 点 UTC 执行
+    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 运行，可改为本地时间对应时区
 
 jobs:
   bump-casks:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@master
+      - name: Setup Homebrew
+        uses: Homebrew/actions/setup-homebrew@main
 
-      - name: Generate Cask List
-        id: casklist
+      - name: List all casks
+        id: list
         run: |
-          CASKS=$(find Casks -type f -name "*.rb" -exec basename {} .rb \; | tr '\n' ' ')
-          echo "casks=$CASKS" >> $GITHUB_OUTPUT
+          echo "casks<<EOF" >> $GITHUB_OUTPUT
+          find Casks -type f -name "*.rb" \
+            | sed 's|Casks/||;s|.rb$||' >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Bump Casks
+      - name: Bump all casks
         uses: Homebrew/actions/bump-packages@main
         with:
           token: ${{ secrets.GH_TOKEN }}
-          casks: ${{ steps.casklist.outputs.casks }}
+          casks: ${{ steps.list.outputs.casks }}
           fork: false
-
-      - name: Commit changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
-            git add Casks/
-            git commit -m "Auto update casks"
-            git push origin HEAD
-          else
-            echo "No changes to commit."
-          fi
