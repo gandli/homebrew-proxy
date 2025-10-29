@@ -70,8 +70,17 @@ jobs:
           set -e
           eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
           echo "Attempting bump for cask: ${{ matrix.formula }}"
-          # Try bump-cask-pr (auto-livecheck); if not supported or no update, do not fail the whole matrix item
-          brew bump-cask-pr "${{ matrix.formula }}" --message "Bump ${{ matrix.formula }} to latest version" || echo "No bump or command failed for ${{ matrix.formula }}; continuing"
+          # Use livecheck to discover latest version
+          LATEST_JSON=$(brew livecheck --json --cask "${{ matrix.formula }}" || true)
+          echo "$LATEST_JSON" | jq '.' || true
+          NEW_VERSION=$(echo "$LATEST_JSON" | jq -r '.[0].latest.version // .[0].latest // .[0].version.latest // .[0].version.stable // empty')
+          if [ -z "$NEW_VERSION" ] || [ "$NEW_VERSION" = "null" ]; then
+            echo "No livecheck version found for ${{ matrix.formula }}, skipping bump."
+            exit 0
+          fi
+          echo "Livecheck suggests new version: $NEW_VERSION"
+          # Try bump-cask-pr with explicit version; if fails or no update, continue without failing matrix item
+          brew bump-cask-pr "${{ matrix.formula }}" --version "$NEW_VERSION" --message "Bump ${{ matrix.formula }} to $NEW_VERSION" || echo "No bump or command failed for ${{ matrix.formula }}; continuing"
 
   release:
     name: Create GitHub Release with Cask assets
