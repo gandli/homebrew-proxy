@@ -1,15 +1,16 @@
-name: Auto Update Casks (Direct Commit)
+name: Auto Update Casks
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 执行
+    - cron: "0 */6 * * *" # 每 6 小时执行一次
+
+permissions:
+  contents: write
 
 jobs:
   bump-casks:
-    runs-on: macos-latest
-    permissions:
-      contents: write
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
@@ -17,36 +18,42 @@ jobs:
         with:
           token: ${{ secrets.GH_TOKEN }}
 
-      - name: Setup Homebrew
-        uses: Homebrew/actions/setup-homebrew@main
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
 
-      - name: List all casks
-        id: list
-        run: |
-          echo "casks<<EOF" >> $GITHUB_OUTPUT
-          find Casks -type f -name "*.rb" \
-            | sed 's|Casks/||;s|.rb$||' >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Update Homebrew
+        run: brew update-reset
 
-      - name: Bump all casks (commit directly)
-        env:
-          HOMEBREW_DEVELOPER: 1
-          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Update all Casks in Tap
         run: |
-          echo "${{ steps.list.outputs.casks }}" | while read cask; do
-            [[ -z "$cask" ]] && continue
-            echo "Updating $cask ..."
-            brew bump-cask-pr "$cask" --write-only --no-audit || true
+          set -eux
+          TAP_PATH="$(brew --repo ${{ github.repository }})"
+          cd "$TAP_PATH/Casks"
+
+          for cask in *.rb; do
+            echo "Checking $cask ..."
+            # 跳过带有 no_autobump! 或 skip livecheck 的 cask
+            if grep -qE 'no_autobump!|livecheck do.*skip' "$cask"; then
+              echo "Skipping $cask (autobump disabled)"
+              continue
+            fi
+
+            # 检查是否有更新
+            if brew livecheck --cask "./$cask" | grep -q "Newer version available"; then
+              echo "Updating $cask ..."
+              brew bump-cask-pr --write-only --commit --no-audit --no-style "./$cask" || true
+            fi
           done
 
-      - name: Commit changes
+      - name: Commit and push changes
         run: |
+          cd "$(brew --repo ${{ github.repository }})"
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
           if ! git diff --cached --quiet; then
-            git commit -m "Auto-update Casks ($(date -u +'%Y-%m-%d'))"
-            git push
+            git commit -m "chore: auto-update casks"
+            git push origin HEAD
           else
             echo "No updates found."
           fi
