@@ -1,20 +1,21 @@
-name: Auto Update & Merge Casks
+name: Auto Update Casks (Direct Commit)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 运行
+    - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 执行
 
 jobs:
   bump-casks:
     runs-on: macos-latest
     permissions:
       contents: write
-      pull-requests: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}
 
       - name: Setup Homebrew
         uses: Homebrew/actions/setup-homebrew@main
@@ -27,23 +28,25 @@ jobs:
             | sed 's|Casks/||;s|.rb$||' >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Bump all casks
-        id: bump
-        uses: Homebrew/actions/bump-packages@main
-        with:
-          token: ${{ secrets.GH_TOKEN }}
-          casks: ${{ steps.list.outputs.casks }}
-          fork: false
-
-      - name: Wait for PR creation
-        run: sleep 60
-
-      - name: Auto merge bump PRs
+      - name: Bump all casks (commit directly)
         env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          HOMEBREW_DEVELOPER: 1
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
-          gh pr list --state open --author "$(git config user.name)" --json number,title \
-            | jq -r '.[].number' | while read pr; do
-                echo "Merging PR #$pr"
-                gh pr merge "$pr" --squash --delete-branch --admin
-              done
+          echo "${{ steps.list.outputs.casks }}" | while read cask; do
+            [[ -z "$cask" ]] && continue
+            echo "Updating $cask ..."
+            brew bump-cask-pr "$cask" --write-only --no-audit || true
+          done
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks
+          if ! git diff --cached --quiet; then
+            git commit -m "Auto-update Casks ($(date -u +'%Y-%m-%d'))"
+            git push
+          else
+            echo "No updates found."
+          fi
