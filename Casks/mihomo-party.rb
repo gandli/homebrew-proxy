@@ -35,7 +35,7 @@ cask "mihomo-party" do
   depends_on macos: ">= :catalina"
 
   uninstall launchctl: "party.mihomo.helper",
-            pkgutil: "party.mihomo.app"
+            pkgutil:   "party.mihomo.app"
 
   zap trash: "~/Library/Application Support/mihomo-party"
 end

@@ -17,7 +17,7 @@ cask "sfm" do
 
   app "SFM.app"
 
-  uninstall quit: "io.nekohasekai.sfa.independent",
+  uninstall quit:       "io.nekohasekai.sfa.independent",
             login_item: "SFM"
 
   zap trash: "~/Library/Group Containers/group.io.nekohasekai.sfa"
