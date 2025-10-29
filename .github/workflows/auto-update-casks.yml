@@ -1,6 +1,9 @@
 name: Auto Update Casks
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *" # 每天凌晨 3 点 UTC 运行，可改为本地时间对应时区
